@@ -9,3 +9,4 @@ decorator<5
 tqdm
 proglog
 setuptools
+Pillow<10
