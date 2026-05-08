@@ -1,5 +1,10 @@
 streamlit
 anthropic
 requests
-moviepy
-imageio-ffmpeg
+moviepy==1.0.3
+imageio==2.25.1
+imageio-ffmpeg==0.4.9
+numpy
+decorator<5
+tqdm
+proglog
