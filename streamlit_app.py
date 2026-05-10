@@ -6,6 +6,8 @@ import os
 import json
 import re
 import base64
+import numpy as np
+from PIL import Image, ImageDraw, ImageFont
 
 
 def synthesize_speech(text, voice_id, api_key):
@@ -27,19 +29,14 @@ def synthesize_speech(text, voice_id, api_key):
 def fetch_pexels_video(query, api_key):
     headers = {"Authorization": api_key}
     params = {"query": query, "per_page": 5, "orientation": "portrait"}
-    r = requests.get(
-        "https://api.pexels.com/videos/search",
-        headers=headers,
-        params=params,
-        timeout=15,
-    )
+    r = requests.get("https://api.pexels.com/videos/search",
+                     headers=headers, params=params, timeout=15)
     r.raise_for_status()
     videos = r.json().get("videos", [])
     for video in videos:
         for vf in video.get("video_files", []):
             if vf.get("width", 0) < vf.get("height", 1):
-                video_url = vf["link"]
-                resp = requests.get(video_url, timeout=30, stream=True)
+                resp = requests.get(vf["link"], timeout=30, stream=True)
                 resp.raise_for_status()
                 tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
                 for chunk in resp.iter_content(chunk_size=8192):
@@ -67,9 +64,49 @@ def generate_script(topic, num_scenes, api_key):
     return json.loads(raw)
 
 
+FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+
+
+def render_word_image(word):
+    font = ImageFont.truetype(FONT_PATH, 90)
+    tmp = Image.new("RGBA", (10, 10))
+    bbox = ImageDraw.Draw(tmp).textbbox((0, 0), word, font=font, stroke_width=6)
+    text_w = bbox[2] - bbox[0]
+    text_h = bbox[3] - bbox[1]
+    pad = 30
+    img = Image.new("RGBA", (text_w + pad * 2, text_h + pad * 2), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    d.text((pad - bbox[0], pad - bbox[1]), word, font=font,
+           fill=(255, 235, 59), stroke_width=6, stroke_fill=(0, 0, 0))
+    return np.array(img)
+
+
+def words_from_alignment(alignment):
+    chars = alignment.get("characters", [])
+    char_start = alignment.get("character_start_times_seconds", [])
+    char_end = alignment.get("character_end_times_seconds", [])
+    if not chars or not char_start:
+        return []
+    out = []
+    cur, cs, ce = "", None, None
+    for ch, s, e in zip(chars, char_start, char_end):
+        if ch == " ":
+            if cur:
+                out.append((cur, cs, ce))
+                cur, cs = "", None
+        else:
+            if cs is None:
+                cs = s
+            cur += ch
+            ce = e
+    if cur:
+        out.append((cur, cs, ce))
+    return out
+
+
 def build_video(scenes, audio_paths, alignments):
     from moviepy.editor import (
-        VideoFileClip, AudioFileClip, TextClip,
+        VideoFileClip, AudioFileClip, ImageClip,
         CompositeVideoClip, concatenate_videoclips, ColorClip,
     )
     W, H = 1080, 1920
@@ -79,53 +116,24 @@ def build_video(scenes, audio_paths, alignments):
         duration = audio_clip.duration
         broll_path = scene.get("_broll_path")
         if broll_path and os.path.exists(broll_path):
-            bg = (
-                VideoFileClip(broll_path, audio=False)
-                .loop(duration=duration)
-                .resize((W, H))
-                .set_duration(duration)
-            )
+            bg = (VideoFileClip(broll_path, audio=False)
+                  .loop(duration=duration)
+                  .resize((W, H))
+                  .set_duration(duration))
         else:
             bg = ColorClip((W, H), color=(10, 10, 10), duration=duration)
-        chars = alignment.get("characters", [])
-        char_start = alignment.get("character_start_times_seconds", [])
-        char_end = alignment.get("character_end_times_seconds", [])
         word_clips = []
-        if chars and char_start:
-            words, starts, ends = [], [], []
-            cur_word, cur_start, cur_end = "", None, None
-            for ch, cs, ce in zip(chars, char_start, char_end):
-                if ch == " ":
-                    if cur_word:
-                        words.append(cur_word)
-                        starts.append(cur_start)
-                        ends.append(cur_end)
-                        cur_word, cur_start, cur_end = "", None, None
-                else:
-                    if cur_start is None:
-                        cur_start = cs
-                    cur_word += ch
-                    cur_end = ce
-            if cur_word:
-                words.append(cur_word)
-                starts.append(cur_start)
-                ends.append(cur_end)
-            for word, ws, we in zip(words, starts, ends):
-                wdur = max(float(we) - float(ws), 0.1)
-                tc = (
-                    TextClip(word, fontsize=90, font="DejaVu-Sans-Bold",
-                              color="white", stroke_color="black", stroke_width=4,
-                              method="caption", size=(W - 80, None))
-                    .set_start(float(ws))
-                    .set_duration(wdur)
-                    .set_position(("center", H * 0.72))
-                )
-                word_clips.append(tc)
-        scene_clip = (
-            CompositeVideoClip([bg] + word_clips, size=(W, H))
-            .set_audio(audio_clip)
-            .set_duration(duration)
-        )
+        for word, ws, we in words_from_alignment(alignment):
+            wdur = max(float(we) - float(ws), 0.1)
+            arr = render_word_image(word)
+            ic = (ImageClip(arr, transparent=True)
+                  .set_start(float(ws))
+                  .set_duration(wdur)
+                  .set_position(("center", H * 0.72)))
+            word_clips.append(ic)
+        scene_clip = (CompositeVideoClip([bg] + word_clips, size=(W, H))
+                      .set_audio(audio_clip)
+                      .set_duration(duration))
         clips.append(scene_clip)
     final = concatenate_videoclips(clips, method="compose")
     out_path = tempfile.mktemp(suffix=".mp4")
