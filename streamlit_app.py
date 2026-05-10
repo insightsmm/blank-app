@@ -654,7 +654,7 @@ with tab_settings:
     st.subheader("Required frameworks")
     st.caption("Every post will visibly apply these. Edit to match your "
                "proprietary methodology.")
-    st.text_area("Frameworks", value=ss.frameworks, height=320, key="frameworks")
+    ss.frameworks = st.text_area("Frameworks", value=ss.frameworks, height=320)
     st.markdown("</div>", unsafe_allow_html=True)
 
 
