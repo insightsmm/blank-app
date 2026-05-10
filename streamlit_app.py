@@ -3,7 +3,6 @@ import anthropic
 import requests
 import json
 import re
-import io
 from datetime import date
 from urllib.parse import urlparse
 
@@ -78,16 +77,34 @@ st.markdown("<div class='hero-sub'>Daily SEO-optimized blog posts, auto-publishe
             unsafe_allow_html=True)
 
 
-# ── Generation ──────────────────────────────────────────────────────────
+# ── Defaults ───────────────────────────────────────────────────────────
 INDUSTRIES = [
     "SaaS / Software", "E-commerce", "Health & Wellness", "Finance & Fintech",
     "Real Estate", "Marketing & Agencies", "Education", "Travel & Hospitality",
     "Food & Beverage", "Legal Services", "Fitness & Sports", "Beauty & Skincare",
     "Home Services", "B2B Services", "Crypto & Web3", "AI & Machine Learning",
+    "Coaching & Consulting",
 ]
 
 TONES = ["Professional", "Conversational", "Authoritative expert", "Friendly & casual",
          "Data-driven", "Storytelling"]
+
+DEFAULT_FRAMEWORKS = """\
+TPO Method (Target / Problem / Outcome)
+- Target: who the post is for and the context they're in.
+- Problem: the specific friction or pain they're stuck on.
+- Outcome: what success looks like once they apply the post.
+
+3Cs (Clarity / Conciseness / Consistency)
+- Clarity: one idea per paragraph, plain language.
+- Conciseness: every sentence earns its place.
+- Consistency: voice, terms, and formatting don't drift.
+
+Clarity Mirror Method
+- Mirror the reader's current thought/feeling before introducing the insight.
+- Restate their internal monologue so they feel seen.
+- Then bridge to the new perspective or actionable step.
+"""
 
 
 def _strip_code_fence(s: str) -> str:
@@ -97,155 +114,128 @@ def _strip_code_fence(s: str) -> str:
     return s.strip()
 
 
-def suggest_topics(industry, website_context, api_key, n=5):
-    client = anthropic.Anthropic(api_key=api_key)
-    prompt = (
-        f"Suggest {n} fresh, SEO-driven blog topics for a {industry} business.\n"
-        f"Context about the site: {website_context or '(none)'}\n\n"
-        "Each topic must target a real search intent, ideally a long-tail keyword "
-        "with reasonable difficulty. Mix 'how-to', 'listicle', 'vs/comparison', "
-        "and 'beginner guide' formats.\n\n"
-        "Return ONLY a JSON array of objects with fields: "
-        "title, target_keyword, search_intent (informational|commercial|transactional|navigational), "
-        "format (how-to|listicle|comparison|guide|case-study)."
-    )
-    msg = client.messages.create(
-        model="claude-opus-4-5", max_tokens=1500,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    return json.loads(_strip_code_fence(msg.content[0].text))
+# ── Image sourcing (Pexels) ────────────────────────────────────────────
+def fetch_pexels_image(query, api_key, orientation="landscape"):
+    """Return (url, photographer, photographer_url) or (None, None, None)."""
+    if not api_key or not query:
+        return None, None, None
+    try:
+        r = requests.get(
+            "https://api.pexels.com/v1/search",
+            headers={"Authorization": api_key},
+            params={"query": query, "per_page": 1, "orientation": orientation,
+                    "size": "large"},
+            timeout=15,
+        )
+        if r.status_code != 200:
+            return None, None, None
+        photos = r.json().get("photos", [])
+        if not photos:
+            return None, None, None
+        p = photos[0]
+        url = (p.get("src") or {}).get("large2x") or (p.get("src") or {}).get("large")
+        return url, p.get("photographer"), p.get("photographer_url")
+    except requests.RequestException:
+        return None, None, None
 
 
-def generate_blog_post(topic, target_keyword, industry, tone, word_count,
-                       website_url, website_context, api_key):
-    client = anthropic.Anthropic(api_key=api_key)
-    system = (
-        "You are a senior SEO content strategist who writes blog posts that rank "
-        "on the first page of Google. You follow Google's E-E-A-T guidelines, "
-        "use natural keyword placement (no stuffing), and write for humans first. "
-        "You produce clean, semantic HTML."
-    )
-    user = f"""Write a complete, publication-ready blog post.
-
-Topic: {topic}
-Primary keyword: {target_keyword}
-Industry: {industry}
-Tone: {tone}
-Target word count: ~{word_count}
-Site: {website_url or '(not provided)'}
-Site context: {website_context or '(none)'}
-
-Requirements:
-- SEO title: 50–60 chars, include the primary keyword near the front.
-- Meta description: 140–158 chars, include keyword, end with a soft CTA.
-- URL slug: lowercase, hyphenated, ≤60 chars, keyword-bearing.
-- One <h1> at the top, then logical <h2> sections, optional <h3> sub-sections.
-- 800–{max(900, word_count + 200)} words. Short paragraphs (≤3 sentences). Scannable.
-- Include 1 bulleted or numbered list and at least 1 short table when natural.
-- Place the primary keyword in: title, H1, first 100 words, one H2, meta description, and slug.
-- Include 4–6 LSI/semantic keywords naturally throughout.
-- Include an FAQ section with 4 questions answered concisely (great for People Also Ask).
-- Include a 2–3 sentence conclusion with a clear next step.
-- Image suggestion: one hero image with descriptive alt text including the keyword.
-- Internal link suggestions: 2 (anchor text + target topic).
-- External link suggestions: 1–2 to authoritative sources (anchor + URL).
-
-Return ONLY a single JSON object with these fields:
-{{
-  "seo_title": str,
-  "meta_description": str,
-  "slug": str,
-  "primary_keyword": str,
-  "secondary_keywords": [str, ...],
-  "html": str,             // full post body as HTML, starting with <h1> and including the FAQ section as <h2>FAQ</h2> with <h3> questions
-  "faq": [{{"question": str, "answer": str}}, ...],
-  "hero_image": {{"alt": str, "search_query": str}},
-  "internal_links": [{{"anchor": str, "topic": str}}, ...],
-  "external_links": [{{"anchor": str, "url": str}}, ...],
-  "tags": [str, ...],
-  "categories": [str, ...]
-}}"""
-    msg = client.messages.create(
-        model="claude-opus-4-5", max_tokens=8000,
-        system=system,
-        messages=[{"role": "user", "content": user}],
-    )
-    return json.loads(_strip_code_fence(msg.content[0].text))
+def _img_figure(url, alt, credit_name=None, credit_url=None):
+    cap = ""
+    if credit_name:
+        if credit_url:
+            cap = (f'<figcaption style="font-size:0.85em;color:#666;">'
+                   f'Photo by <a href="{credit_url}" target="_blank" '
+                   f'rel="noopener nofollow">{credit_name}</a> on Pexels'
+                   f'</figcaption>')
+        else:
+            cap = (f'<figcaption style="font-size:0.85em;color:#666;">'
+                   f'Photo by {credit_name} on Pexels</figcaption>')
+    return (f'<figure>\n  <img src="{url}" alt="{alt}" loading="lazy" '
+            f'style="width:100%;height:auto;border-radius:8px;">\n  {cap}\n</figure>')
 
 
-# ── SEO scoring (heuristic, on-page) ────────────────────────────────────
-def seo_score(post):
-    checks = []
-    title = post.get("seo_title", "")
-    meta = post.get("meta_description", "")
-    slug = post.get("slug", "")
-    html = post.get("html", "")
-    kw = post.get("primary_keyword", "").lower()
-    text = re.sub(r"<[^>]+>", " ", html).lower()
-    first_100 = " ".join(text.split()[:100])
+def inject_images(post, pexels_key):
+    """Resolve image queries to real Pexels URLs and inject <figure> tags
+    into post['html'] (hero after H1, plus one image after the first H2)."""
+    html = post.get("html", "") or ""
+    images = post.get("images") or []
+    if not images:
+        # Fall back to hero_image suggestion only
+        hi = post.get("hero_image") or {}
+        if hi.get("search_query"):
+            images = [{"position": "hero", "alt": hi.get("alt", ""),
+                       "search_query": hi["search_query"]}]
+    placed = []
 
-    def add(name, ok, hint=""):
-        checks.append({"name": name, "ok": bool(ok), "hint": hint})
+    def place(spec, html_in):
+        url, name, prof_url = fetch_pexels_image(spec.get("search_query", ""), pexels_key)
+        if not url:
+            return html_in, None
+        fig = _img_figure(url, spec.get("alt", ""), name, prof_url)
+        position = spec.get("position", "hero")
+        if position == "hero":
+            # insert after the closing </h1>
+            m = re.search(r"</h1>", html_in, flags=re.IGNORECASE)
+            if m:
+                html_in = html_in[: m.end()] + "\n" + fig + "\n" + html_in[m.end():]
+            else:
+                html_in = fig + "\n" + html_in
+        else:
+            # insert after the first </h2>
+            m = re.search(r"</h2>", html_in, flags=re.IGNORECASE)
+            if m:
+                html_in = html_in[: m.end()] + "\n" + fig + "\n" + html_in[m.end():]
+            else:
+                html_in += "\n" + fig
+        return html_in, {"url": url, "alt": spec.get("alt", ""),
+                         "credit": name, "credit_url": prof_url,
+                         "position": position}
 
-    add("Title length 50–60 chars", 50 <= len(title) <= 60, f"now {len(title)}")
-    add("Meta description 140–158 chars", 140 <= len(meta) <= 158, f"now {len(meta)}")
-    add("Keyword in title", kw and kw in title.lower())
-    add("Keyword in meta", kw and kw in meta.lower())
-    add("Keyword in slug", kw and kw.replace(" ", "-") in slug.lower())
-    add("Keyword in first 100 words", kw and kw in first_100)
-    add("Has H1", "<h1" in html.lower())
-    add("Has ≥3 H2 sections", html.lower().count("<h2") >= 3)
-    add("Has list (ul/ol)", "<ul" in html.lower() or "<ol" in html.lower())
-    add("Has FAQ section", any(k in html.lower() for k in ["<h2>faq", "frequently asked"]))
-    word_count = len(text.split())
-    add("Word count ≥ 800", word_count >= 800, f"now {word_count}")
-    density = text.count(kw) / max(word_count, 1) * 100 if kw else 0
-    add("Keyword density 0.5–2.5%", 0.5 <= density <= 2.5, f"{density:.2f}%")
+    # Place at most one hero + one inline
+    hero = next((i for i in images if i.get("position", "hero") == "hero"), None)
+    inline = next((i for i in images if i.get("position") and
+                   i["position"] != "hero"), None)
+    if hero:
+        html, info = place(hero, html)
+        if info:
+            placed.append(info)
+    if inline:
+        html, info = place(inline, html)
+        if info:
+            placed.append(info)
 
-    passed = sum(1 for c in checks if c["ok"])
-    return round(passed / len(checks) * 100), checks
-
-
-# ── Schema.org JSON-LD ─────────────────────────────────────────────────
-def build_jsonld(post, website_url):
-    parsed = urlparse(website_url) if website_url else None
-    site_name = parsed.netloc if parsed and parsed.netloc else "Your Site"
-    article = {
-        "@context": "https://schema.org",
-        "@type": "Article",
-        "headline": post.get("seo_title", ""),
-        "description": post.get("meta_description", ""),
-        "keywords": ", ".join([post.get("primary_keyword", "")] + post.get("secondary_keywords", [])),
-        "datePublished": date.today().isoformat(),
-        "author": {"@type": "Organization", "name": site_name},
-        "publisher": {"@type": "Organization", "name": site_name},
-    }
-    faq_items = post.get("faq") or []
-    if faq_items:
-        faq = {
-            "@context": "https://schema.org",
-            "@type": "FAQPage",
-            "mainEntity": [
-                {"@type": "Question", "name": q["question"],
-                 "acceptedAnswer": {"@type": "Answer", "text": q["answer"]}}
-                for q in faq_items
-            ],
-        }
-        return [article, faq]
-    return [article]
+    post["html"] = html
+    post["resolved_images"] = placed
+    return post
 
 
-def html_with_schema(post, website_url):
-    schema = build_jsonld(post, website_url)
-    schema_tag = (
-        "<script type=\"application/ld+json\">\n"
-        + json.dumps(schema, indent=2)
-        + "\n</script>"
-    )
-    return post["html"] + "\n\n" + schema_tag
+# ── WordPress helpers ──────────────────────────────────────────────────
+def wp_fetch_recent_posts(site_url, username, app_password, n=50):
+    """Pull recent published posts to use as the internal-link pool."""
+    base = site_url.rstrip("/")
+    auth = (username, app_password)
+    out = []
+    try:
+        r = requests.get(
+            f"{base}/wp-json/wp/v2/posts",
+            params={"per_page": min(n, 100), "status": "publish",
+                    "_fields": "id,title,link,excerpt"},
+            auth=auth, timeout=20,
+        )
+        if r.status_code != 200:
+            return out
+        for p in r.json():
+            title = re.sub(r"<[^>]+>", "", (p.get("title") or {}).get("rendered", "")).strip()
+            link = p.get("link") or ""
+            excerpt = re.sub(r"<[^>]+>", "",
+                             (p.get("excerpt") or {}).get("rendered", "")).strip()
+            if title and link:
+                out.append({"title": title, "url": link, "excerpt": excerpt[:160]})
+    except requests.RequestException:
+        pass
+    return out
 
 
-# ── WordPress publishing ────────────────────────────────────────────────
 def wp_get_or_create_terms(base, auth, taxonomy, names):
     if not names:
         return []
@@ -253,7 +243,8 @@ def wp_get_or_create_terms(base, auth, taxonomy, names):
     endpoint = f"{base}/wp-json/wp/v2/{taxonomy}"
     for name in names:
         r = requests.get(endpoint, params={"search": name}, auth=auth, timeout=20)
-        r.raise_for_status()
+        if r.status_code != 200:
+            continue
         match = next((t for t in r.json() if t["name"].lower() == name.lower()), None)
         if match:
             ids.append(match["id"])
@@ -289,7 +280,6 @@ def publish_to_wordpress(post, site_url, username, app_password, status="draft",
         if tag_ids:
             payload["tags"] = tag_ids
     except requests.HTTPError as e:
-        # taxonomy creation isn't fatal — proceed without if it fails
         st.warning(f"Couldn't sync tags/categories: {e}")
     r = requests.post(f"{base}/wp-json/wp/v2/posts", json=payload, auth=auth, timeout=30)
     if r.status_code not in (200, 201):
@@ -306,15 +296,329 @@ def test_wp_connection(site_url, username, app_password):
     return False, f"{r.status_code}: {r.text[:200]}"
 
 
-# ── State ───────────────────────────────────────────────────────────────
+# ── Generation ─────────────────────────────────────────────────────────
+def suggest_topics(industry, website_context, api_key, n=5):
+    client = anthropic.Anthropic(api_key=api_key)
+    prompt = (
+        f"Suggest {n} fresh, SEO-driven blog topics for a {industry} business.\n"
+        f"Context about the site: {website_context or '(none)'}\n\n"
+        "Each topic must target a real search intent, ideally a long-tail keyword "
+        "with reasonable difficulty. Mix 'how-to', 'listicle', 'vs/comparison', "
+        "and 'beginner guide' formats.\n\n"
+        "Return ONLY a JSON array of objects with fields: "
+        "title, target_keyword, search_intent (informational|commercial|transactional|navigational), "
+        "format (how-to|listicle|comparison|guide|case-study)."
+    )
+    msg = client.messages.create(
+        model="claude-opus-4-5", max_tokens=1500,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return json.loads(_strip_code_fence(msg.content[0].text))
+
+
+def _build_internal_link_block(pool, max_show=25):
+    if not pool:
+        return ("(No existing posts available — internal_links may be empty. "
+                "Do NOT invent internal URLs.)")
+    lines = []
+    for p in pool[:max_show]:
+        line = f"- {p['title']} — {p['url']}"
+        if p.get("excerpt"):
+            line += f"  ({p['excerpt']})"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def generate_blog_post(topic, target_keyword, industry, tone, word_count,
+                       website_url, website_context, frameworks,
+                       internal_link_pool, api_key):
+    client = anthropic.Anthropic(api_key=api_key)
+    system = (
+        "You are a senior SEO content strategist who writes blog posts that hit "
+        "100/100 on on-page SEO scoring (Yoast/RankMath standards). You follow "
+        "Google's E-E-A-T guidelines, write for humans first, and use natural "
+        "keyword placement (zero stuffing). Output is clean, semantic HTML."
+    )
+    link_block = _build_internal_link_block(internal_link_pool)
+    user = f"""Write a complete, publication-ready blog post.
+
+Topic: {topic}
+Primary keyword: {target_keyword}
+Industry: {industry}
+Tone: {tone}
+Target word count: {max(1500, word_count)}
+Site: {website_url or '(not provided)'}
+Site context: {website_context or '(none)'}
+
+REQUIRED FRAMEWORKS — every post MUST visibly apply ALL of these:
+{frameworks.strip()}
+
+Apply them in the post body using clearly labeled blocks/sub-sections, e.g.
+<h3>Applying the TPO Method</h3>, <h3>Through the 3Cs Lens</h3>,
+<h3>Clarity Mirror</h3>. Don't just name them — show how the framework
+shapes the reader's thinking on this specific topic.
+
+INTERNAL LINK POOL (the ONLY valid internal URLs — pick 3–4 most relevant
+and weave them into the body with natural anchor text. If a perfect match
+isn't here, pick the closest. Do NOT fabricate internal URLs.):
+{link_block}
+
+ON-PAGE SEO REQUIREMENTS — every single one is mandatory:
+1.  SEO title 50–60 chars, primary keyword in the first 4 words.
+2.  Meta description 140–158 chars, includes the keyword, ends with a soft CTA.
+3.  URL slug ≤ 60 chars, lowercase, hyphenated, contains the keyword.
+4.  Exactly one <h1> at the top, contains the primary keyword.
+5.  At least 4 <h2> sections; at least 3 <h3> sub-sections total.
+6.  1500–2000 words. Short paragraphs (≤3 sentences). Highly scannable.
+7.  Primary keyword density 1.0–2.0%. Do not stuff.
+8.  At least 6 LSI/semantic keywords used naturally throughout.
+9.  Primary keyword appears in: title, H1, first 100 words, ≥2 H2s,
+    conclusion, slug, and meta description.
+10. At least 1 numbered list, 1 bulleted list, and 1 short comparison table.
+11. 3–4 in-body internal links chosen ONLY from the pool above, with
+    descriptive (not "click here") anchor text. Inline as <a href="…">.
+12. 2 external links to authoritative sources (.gov, .edu, major
+    publications, primary research). Inline as <a href="…" target="_blank" rel="noopener">.
+13. FAQ section as <h2>FAQ</h2> with 4 <h3> question sub-headings, each
+    answered in 2–3 sentences (optimized for People Also Ask).
+14. Provide TWO image specs in the `images` field: one "hero" and one
+    "inline" (placed after the first H2). For each, give an alt text that
+    contains the primary keyword AND a concrete, photogenic search_query
+    (Pexels-friendly: real-world subjects, e.g. "team strategy meeting
+    whiteboard" — not abstract concepts). Do NOT include <img> tags in the
+    HTML; the app will inject them.
+15. Conclusion ≥3 sentences with a clear, specific next-step CTA.
+16. Add a Table of Contents at the top: <nav class="toc"> with anchor links
+    to each H2 (use slugified ids on the H2s).
+
+Return ONLY a single JSON object with these fields (no prose, no fences):
+{{
+  "seo_title": str,
+  "meta_description": str,
+  "slug": str,
+  "primary_keyword": str,
+  "secondary_keywords": [str, ...],          // ≥6 items
+  "html": str,                               // full body HTML starting with <h1>, includes TOC, FAQ, internal & external <a> tags inline
+  "faq": [{{"question": str, "answer": str}}, ...],  // 4 items
+  "hero_image": {{"alt": str, "search_query": str}},
+  "images": [                                // exactly 2 items (hero + inline)
+    {{"position": "hero",   "alt": str, "search_query": str}},
+    {{"position": "inline", "alt": str, "search_query": str}}
+  ],
+  "internal_links_used": [{{"anchor": str, "url": str}}, ...],  // 3–4 items, URLs must come from the pool
+  "external_links": [{{"anchor": str, "url": str}}, ...],       // 2 items
+  "tags": [str, ...],
+  "categories": [str, ...]
+}}"""
+    msg = client.messages.create(
+        model="claude-opus-4-5", max_tokens=12000,
+        system=system,
+        messages=[{"role": "user", "content": user}],
+    )
+    return json.loads(_strip_code_fence(msg.content[0].text))
+
+
+def refine_blog_post(post, failing_checks, frameworks, internal_link_pool, api_key):
+    """Ask Claude to fix the specific failing SEO checks without rewriting from scratch."""
+    if not failing_checks:
+        return post
+    client = anthropic.Anthropic(api_key=api_key)
+    issues = "\n".join(
+        f"- {c['name']}" + (f" (currently: {c['hint']})" if c.get("hint") else "")
+        for c in failing_checks
+    )
+    link_block = _build_internal_link_block(internal_link_pool)
+    user = f"""Here is a JSON blog-post object. Fix ONLY the failing on-page SEO
+checks listed below by editing the relevant fields. Preserve everything else
+(voice, framework sections, structure). Keep all required frameworks visibly
+applied. Internal links must still come from the pool.
+
+Failing checks:
+{issues}
+
+Internal link pool:
+{link_block}
+
+Required frameworks (must remain visibly applied):
+{frameworks.strip()}
+
+Current post JSON:
+{json.dumps(post)}
+
+Return ONLY the corrected JSON object with the same shape."""
+    msg = client.messages.create(
+        model="claude-opus-4-5", max_tokens=12000,
+        messages=[{"role": "user", "content": user}],
+    )
+    try:
+        return json.loads(_strip_code_fence(msg.content[0].text))
+    except json.JSONDecodeError:
+        return post
+
+
+# ── SEO scoring (rigorous — targets 100/100) ───────────────────────────
+def seo_score(post, frameworks_text=""):
+    checks = []
+    title = post.get("seo_title", "")
+    meta = post.get("meta_description", "")
+    slug = post.get("slug", "")
+    html = post.get("html", "") or ""
+    html_l = html.lower()
+    kw = (post.get("primary_keyword") or "").lower().strip()
+    text = re.sub(r"<[^>]+>", " ", html).lower()
+    words = text.split()
+    word_count = len(words)
+    first_100 = " ".join(words[:100])
+
+    def add(name, ok, hint=""):
+        checks.append({"name": name, "ok": bool(ok), "hint": hint})
+
+    add("Title 50–60 chars", 50 <= len(title) <= 60, f"now {len(title)}")
+    add("Meta 140–158 chars", 140 <= len(meta) <= 158, f"now {len(meta)}")
+    add("Keyword in title", kw and kw in title.lower())
+    add("Keyword in first 4 words of title",
+        kw and kw in " ".join(title.lower().split()[:4]))
+    add("Keyword in meta", kw and kw in meta.lower())
+    add("Slug ≤ 60 chars & has keyword",
+        len(slug) <= 60 and kw and kw.replace(" ", "-") in slug.lower())
+    add("Keyword in first 100 words", kw and kw in first_100)
+    add("Single H1 with keyword",
+        html_l.count("<h1") == 1 and kw and re.search(
+            r"<h1[^>]*>([\s\S]*?)</h1>", html_l).group(1).find(kw) != -1
+        if "<h1" in html_l else False)
+    add("≥4 H2 sections", html_l.count("<h2") >= 4,
+        f"now {html_l.count('<h2')}")
+    add("≥3 H3 sections", html_l.count("<h3") >= 3,
+        f"now {html_l.count('<h3')}")
+    add("Has numbered list", "<ol" in html_l)
+    add("Has bulleted list", "<ul" in html_l)
+    add("Has table", "<table" in html_l)
+    add("Has FAQ section", "<h2" in html_l and "faq" in html_l)
+    add("Word count 1500–2200", 1500 <= word_count <= 2200,
+        f"now {word_count}")
+    density = (text.count(kw) / max(word_count, 1) * 100) if kw else 0
+    add("Keyword density 1.0–2.0%", 1.0 <= density <= 2.0,
+        f"{density:.2f}%")
+    add("≥6 secondary keywords",
+        len(post.get("secondary_keywords") or []) >= 6,
+        f"now {len(post.get('secondary_keywords') or [])}")
+    internal_used = post.get("internal_links_used") or []
+    add("≥3 internal links", len(internal_used) >= 3,
+        f"now {len(internal_used)}")
+    add("Internal links present in HTML",
+        all(li.get("url", "") and li["url"] in html for li in internal_used)
+        if internal_used else False)
+    ext = post.get("external_links") or []
+    add("≥2 external links", len(ext) >= 2, f"now {len(ext)}")
+    add("Has Table of Contents",
+        "toc" in html_l or html_l.count("<nav") >= 1)
+    add("Hero image alt has keyword",
+        kw and kw in (post.get("hero_image") or {}).get("alt", "").lower())
+    img_count = html_l.count("<img")
+    add("≥2 images with alt text",
+        img_count >= 2 and len(re.findall(r'<img[^>]+alt="[^"]+"', html, re.I)) >= 2,
+        f"now {img_count}")
+    # Required frameworks must each appear in headings or labels
+    framework_names = []
+    for line in frameworks_text.splitlines():
+        line = line.strip()
+        if line and not line.startswith("-") and "(" in line:
+            framework_names.append(line.split("(")[0].strip().lower())
+        elif line and not line.startswith("-") and len(line) < 60:
+            framework_names.append(line.lower())
+    framework_names = [n for n in framework_names if n]
+    if framework_names:
+        for name in framework_names:
+            add(f"Applies '{name}'", name in html_l)
+
+    passed = sum(1 for c in checks if c["ok"])
+    return round(passed / len(checks) * 100), checks
+
+
+# ── Schema.org JSON-LD ─────────────────────────────────────────────────
+def build_jsonld(post, website_url):
+    parsed = urlparse(website_url) if website_url else None
+    site_name = parsed.netloc if parsed and parsed.netloc else "Your Site"
+    article = {
+        "@context": "https://schema.org",
+        "@type": "Article",
+        "headline": post.get("seo_title", ""),
+        "description": post.get("meta_description", ""),
+        "keywords": ", ".join(
+            [post.get("primary_keyword", "")] + post.get("secondary_keywords", [])
+        ),
+        "datePublished": date.today().isoformat(),
+        "author": {"@type": "Organization", "name": site_name},
+        "publisher": {"@type": "Organization", "name": site_name},
+    }
+    faq_items = post.get("faq") or []
+    if faq_items:
+        faq = {
+            "@context": "https://schema.org",
+            "@type": "FAQPage",
+            "mainEntity": [
+                {"@type": "Question", "name": q["question"],
+                 "acceptedAnswer": {"@type": "Answer", "text": q["answer"]}}
+                for q in faq_items
+            ],
+        }
+        return [article, faq]
+    return [article]
+
+
+def html_with_schema(post, website_url):
+    schema = build_jsonld(post, website_url)
+    schema_tag = (
+        "<script type=\"application/ld+json\">\n"
+        + json.dumps(schema, indent=2)
+        + "\n</script>"
+    )
+    return post["html"] + "\n\n" + schema_tag
+
+
+# ── State ──────────────────────────────────────────────────────────────
 ss = st.session_state
 ss.setdefault("post", None)
 ss.setdefault("topic_suggestions", [])
 ss.setdefault("selected_topic", "")
+ss.setdefault("frameworks", DEFAULT_FRAMEWORKS)
+ss.setdefault("last_publish_link", "")
 
 
-# ── UI ──────────────────────────────────────────────────────────────────
-tab_generate, tab_publish, tab_settings = st.tabs(["✍️ Generate", "🚀 Publish", "🔌 Site connection"])
+def _generate_with_self_heal(topic, target_kw, industry, tone, word_count,
+                             site_url, site_context, frameworks, link_pool,
+                             api_key, pexels_key, status_box):
+    status_box.write("📥  Pulling internal-link pool from your site...")
+    status_box.write(f"   Found {len(link_pool)} existing posts to link to")
+    status_box.write("✍️   Drafting the post (frameworks + SEO requirements applied)...")
+    post = generate_blog_post(
+        topic, target_kw, industry, tone, word_count,
+        site_url, site_context, frameworks, link_pool, api_key,
+    )
+    if pexels_key:
+        status_box.write("🖼️   Fetching relevant images from Pexels...")
+        post = inject_images(post, pexels_key)
+        status_box.write(f"   Embedded {len(post.get('resolved_images', []))} images")
+    score, checks = seo_score(post, frameworks)
+    status_box.write(f"📊  Initial SEO score: {score}/100")
+    refines = 0
+    while score < 100 and refines < 2:
+        failing = [c for c in checks if not c["ok"]]
+        status_box.write(f"🔧  Refining {len(failing)} issues (pass {refines + 1})...")
+        post = refine_blog_post(post, failing, frameworks, link_pool, api_key)
+        # Re-inject images if the refine pass dropped them
+        if pexels_key and post.get("html", "").lower().count("<img") < 2:
+            post = inject_images(post, pexels_key)
+        score, checks = seo_score(post, frameworks)
+        status_box.write(f"📊  Score after refine: {score}/100")
+        refines += 1
+    return post, score, checks
+
+
+# ── UI ─────────────────────────────────────────────────────────────────
+tab_generate, tab_publish, tab_settings = st.tabs(
+    ["✍️ Generate", "🚀 Publish", "🔌 Site connection"]
+)
 
 with tab_settings:
     st.markdown("<div class='card'>", unsafe_allow_html=True)
@@ -340,8 +644,17 @@ with tab_settings:
         ok, info = test_wp_connection(site_url, wp_user, wp_pass)
         if ok:
             st.success(f"Connected as {info}")
+            pool = wp_fetch_recent_posts(site_url, wp_user, wp_pass, n=50)
+            st.caption(f"Internal-link pool: {len(pool)} published posts available.")
         else:
             st.error(f"Connection failed — {info}")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown("<div class='card'>", unsafe_allow_html=True)
+    st.subheader("Required frameworks")
+    st.caption("Every post will visibly apply these. Edit to match your "
+               "proprietary methodology.")
+    st.text_area("Frameworks", value=ss.frameworks, height=320, key="frameworks")
     st.markdown("</div>", unsafe_allow_html=True)
 
 
@@ -394,11 +707,27 @@ with tab_generate:
     with col2:
         tone = st.selectbox("Tone", TONES, key="tone")
     with col3:
-        word_count = st.slider("Target words", 600, 2500, 1200, step=100)
+        word_count = st.slider("Target words", 1200, 2500, 1700, step=100)
 
-    go = st.button("Generate blog post", type="primary",
-                   disabled=not (topic and topic.strip()),
-                   use_container_width=True)
+    wp_connected = bool(ss.get("site_url") and ss.get("wp_user") and ss.get("wp_pass"))
+    pub_choice = st.radio(
+        "When ready",
+        ["Generate only", "Generate & publish to WordPress",
+         "Generate & save as draft on WordPress"],
+        horizontal=False,
+        index=1 if wp_connected else 0,
+        disabled=not wp_connected,
+        help=None if wp_connected else
+        "Connect your WordPress site in the **Site connection** tab to enable auto-publish.",
+    )
+
+    go = st.button(
+        "🚀 Generate" + (" & publish" if "publish" in pub_choice.lower() else
+                          " & save draft" if "draft" in pub_choice.lower() else ""),
+        type="primary",
+        disabled=not (topic and topic.strip()),
+        use_container_width=True,
+    )
     st.markdown("</div>", unsafe_allow_html=True)
 
     if go:
@@ -408,20 +737,43 @@ with tab_generate:
             st.error("Missing ANTHROPIC_API_KEY in Streamlit secrets.")
             st.stop()
         kw = target_kw.strip() or topic.strip()
-        with st.status("Writing your post...", expanded=True) as status:
-            st.write("🔍  Planning structure & keywords...")
-            post = generate_blog_post(
+        link_pool = []
+        if wp_connected:
+            link_pool = wp_fetch_recent_posts(
+                ss.site_url, ss.wp_user, ss.wp_pass, n=50,
+            )
+        pexels_key = ""
+        try:
+            pexels_key = st.secrets.get("PEXELS_API_KEY", "")
+        except Exception:
+            pass
+        with st.status("Working on your post...", expanded=True) as status_box:
+            post, score, checks = _generate_with_self_heal(
                 topic.strip(), kw, industry, tone, word_count,
                 ss.get("site_url", ""), ss.get("website_context", ""),
-                api_key,
+                ss.frameworks, link_pool, api_key, pexels_key, status_box,
             )
             ss.post = post
-            st.write("📊  Scoring on-page SEO...")
-            status.update(label="✅ Draft ready", state="complete")
+            ss.last_score = score
+            ss.last_checks = checks
+
+            if pub_choice != "Generate only" and wp_connected:
+                wp_status = "publish" if "publish" in pub_choice.lower() else "draft"
+                status_box.write(f"📤  Sending to WordPress as **{wp_status}**...")
+                try:
+                    result = publish_to_wordpress(
+                        post, ss.site_url, ss.wp_user, ss.wp_pass, status=wp_status,
+                    )
+                    ss.last_publish_link = result.get("link", "")
+                    status_box.write(f"✅  Live at {ss.last_publish_link}")
+                except Exception as e:
+                    status_box.write(f"⚠️  Publish failed: {e}")
+            status_box.update(label=f"✅ Done · SEO {score}/100", state="complete")
 
 if ss.post:
     post = ss.post
-    score, checks = seo_score(post)
+    score = ss.get("last_score", seo_score(post, ss.frameworks)[0])
+    checks = ss.get("last_checks", seo_score(post, ss.frameworks)[1])
 
     st.markdown("<div class='card'>", unsafe_allow_html=True)
     cols = st.columns([1, 3])
@@ -438,6 +790,8 @@ if ss.post:
                      + post.get("secondary_keywords", [])]),
             unsafe_allow_html=True,
         )
+        if ss.get("last_publish_link"):
+            st.success(f"Published: [{ss.last_publish_link}]({ss.last_publish_link})")
 
     with st.expander("SEO checklist", expanded=False):
         for c in checks:
@@ -519,6 +873,7 @@ with tab_publish:
                         publish_date=pub_date.isoformat() if pub_date else None,
                     )
                 link = result.get("link") or f"{ss.site_url.rstrip('/')}/?p={result.get('id')}"
+                ss.last_publish_link = link
                 st.success(f"Published! [{link}]({link})")
             except Exception as e:
                 st.error(f"Publish failed: {e}")
@@ -529,8 +884,8 @@ with tab_publish:
             "To publish a fresh post every day automatically, schedule the helper "
             "script `daily_publish.py` (included in this repo) on any cron service "
             "(GitHub Actions, Vercel cron, your own server). It calls the same "
-            "generation + WordPress publish flow used here, with your industry and "
-            "site context as inputs."
+            "generation + WordPress publish flow used here, with your industry, "
+            "site context, and required frameworks as inputs."
         )
         st.code(
             "# Example GitHub Actions cron (.github/workflows/daily-blog.yml)\n"
@@ -551,8 +906,8 @@ with tab_publish:
             "          WP_SITE_URL: ${{ secrets.WP_SITE_URL }}\n"
             "          WP_USERNAME: ${{ secrets.WP_USERNAME }}\n"
             "          WP_APP_PASSWORD: ${{ secrets.WP_APP_PASSWORD }}\n"
-            "          INDUSTRY: 'SaaS / Software'\n"
-            "          SITE_CONTEXT: 'A project-management tool for remote agencies.'\n",
+            "          INDUSTRY: 'Coaching & Consulting'\n"
+            "          SITE_CONTEXT: 'A coaching practice teaching the TPO method, 3Cs, and Clarity Mirror.'\n",
             language="yaml",
         )
     st.markdown("</div>", unsafe_allow_html=True)
