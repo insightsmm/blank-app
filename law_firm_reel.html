@@ -1,0 +1,686 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Insight Social Media — Law Firm Reel</title>
+<style>
+  :root {
+    --ink: #1a1a2e;
+    --paper: #fff8e8;
+    --pop: #ffd166;
+    --hot: #ef476f;
+    --teal: #06d6a0;
+    --blue: #118ab2;
+    --shadow: rgba(0,0,0,0.18);
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: #0b0e14; color: var(--paper);
+    font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+    overflow: hidden;
+  }
+  .stage-wrap {
+    display: flex; align-items: center; justify-content: center;
+    height: 100vh; padding: 12px; gap: 16px; flex-direction: column;
+  }
+  .reel {
+    position: relative;
+    width: min(56.25vh, 96vw);
+    aspect-ratio: 9 / 16;
+    background: var(--paper);
+    border-radius: 24px;
+    overflow: hidden;
+    box-shadow: 0 30px 80px rgba(0,0,0,0.55);
+    border: 4px solid #111;
+  }
+  .scene {
+    position: absolute; inset: 0;
+    opacity: 0; visibility: hidden;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+  }
+  .controls {
+    display: flex; gap: 10px; align-items: center;
+  }
+  button.play {
+    background: linear-gradient(135deg, var(--hot), var(--pop));
+    color: #1a1a2e; border: 0; border-radius: 999px;
+    padding: 14px 28px; font-weight: 800; font-size: 16px;
+    cursor: pointer; letter-spacing: 0.3px;
+    box-shadow: 0 6px 18px rgba(239,71,111,0.45);
+  }
+  button.play:disabled { opacity: 0.45; cursor: not-allowed; }
+  .meta { color: #9aa3b2; font-size: 13px; }
+
+  /* Cartoon backdrops */
+  .sky { background: linear-gradient(180deg, #87ceeb 0%, #fcd5a3 70%, #b4e3a1 100%); }
+  .room { background: radial-gradient(ellipse at 50% 30%, #ffe9a6, #f5c267 70%, #c98c2a); }
+  .grid { background:
+    repeating-linear-gradient(0deg, rgba(0,0,0,0.06) 0 1px, transparent 1px 40px),
+    repeating-linear-gradient(90deg, rgba(0,0,0,0.06) 0 1px, transparent 1px 40px),
+    linear-gradient(180deg, #fff3d6, #ffd9a3);
+  }
+  .night { background: radial-gradient(ellipse at 50% 30%, #2a3160, #0f1230); }
+  .pop-bg { background: radial-gradient(ellipse at 50% 50%, #ffe066 0%, #ef476f 100%); }
+  .court { background: linear-gradient(180deg, #b08968 0%, #7f5539 100%); }
+
+  /* Burst overlay used on every scene */
+  .burst {
+    position: absolute; inset: 0; pointer-events: none;
+    background:
+      radial-gradient(circle at 50% 50%, rgba(255,255,255,0.0) 35%, rgba(255,255,255,0.0) 36%);
+  }
+
+  .scene-active {
+    opacity: 1; visibility: visible;
+    animation: fadeIn 0.35s ease both;
+  }
+  @keyframes fadeIn {
+    from { opacity: 0; transform: scale(1.03); }
+    to { opacity: 1; transform: scale(1); }
+  }
+
+  /* On-screen text overlays */
+  .overlay {
+    position: absolute;
+    left: 50%; transform: translateX(-50%);
+    text-align: center;
+    color: #fff;
+    font-weight: 900;
+    text-shadow: 3px 3px 0 #000, 0 0 12px rgba(0,0,0,0.4);
+    letter-spacing: 0.5px;
+    line-height: 1.05;
+    padding: 0 18px;
+    width: 92%;
+    pointer-events: none;
+  }
+  .overlay.top { top: 8%; font-size: clamp(20px, 4.5vh, 36px); }
+  .overlay.mid { top: 44%; font-size: clamp(22px, 5vh, 40px); }
+  .overlay.bot {
+    bottom: 12%; font-size: clamp(18px, 3.6vh, 28px);
+    background: #ffd166; color: #1a1a2e; text-shadow: none;
+    padding: 10px 14px; border-radius: 14px;
+    border: 3px solid #1a1a2e; box-shadow: 4px 4px 0 #1a1a2e;
+    width: auto; max-width: 92%;
+  }
+  .badge {
+    display: inline-block; background: var(--hot);
+    color: #fff; padding: 6px 12px;
+    border-radius: 999px; font-weight: 800;
+    font-size: clamp(12px, 2.4vh, 16px);
+    border: 3px solid #1a1a2e;
+    transform: rotate(-3deg);
+    box-shadow: 4px 4px 0 #1a1a2e;
+  }
+  .narration {
+    position: absolute; bottom: 4%; left: 4%; right: 4%;
+    background: rgba(0,0,0,0.72);
+    color: #fff; font-weight: 700; font-size: clamp(14px, 2.5vh, 18px);
+    padding: 10px 14px; border-radius: 12px;
+    text-align: center; line-height: 1.25;
+    border: 2px solid rgba(255,255,255,0.15);
+    backdrop-filter: blur(3px);
+  }
+  .timer {
+    position: absolute; top: 10px; right: 12px;
+    background: rgba(0,0,0,0.65); color: #fff;
+    font-size: 12px; font-weight: 700;
+    padding: 4px 8px; border-radius: 8px; z-index: 50;
+  }
+  .progress {
+    position: absolute; left: 0; right: 0; bottom: 0; height: 4px;
+    background: rgba(0,0,0,0.15); z-index: 50;
+  }
+  .progress > i {
+    display: block; height: 100%; width: 0%;
+    background: linear-gradient(90deg, var(--hot), var(--pop));
+    transition: width 0.2s linear;
+  }
+
+  /* Cartoon character */
+  .character { position: absolute; bottom: 6%; left: 50%; transform: translateX(-50%); width: 60%; max-width: 320px; }
+  .lawyer { animation: bob 1.8s ease-in-out infinite; }
+  @keyframes bob {
+    0%, 100% { transform: translate(-50%, 0); }
+    50% { transform: translate(-50%, -8px); }
+  }
+
+  .billboard { animation: drift 6s ease-in-out infinite; }
+  @keyframes drift {
+    0%,100% { transform: translateX(-50%) translateY(0); }
+    50% { transform: translateX(-50%) translateY(-6px); }
+  }
+
+  .phone { animation: tilt 3s ease-in-out infinite; transform-origin: 50% 60%; }
+  @keyframes tilt {
+    0%,100% { transform: rotate(-3deg); }
+    50% { transform: rotate(3deg); }
+  }
+
+  .scroll {
+    animation: scrollUp 4s linear infinite;
+  }
+  @keyframes scrollUp {
+    from { transform: translateY(0); }
+    to { transform: translateY(-260px); }
+  }
+
+  .pop-in { animation: popIn 0.4s cubic-bezier(.2,1.6,.4,1) both; }
+  @keyframes popIn {
+    from { transform: translateX(-50%) scale(0); opacity: 0; }
+    to { transform: translateX(-50%) scale(1); opacity: 1; }
+  }
+
+  .pulse { animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse {
+    0%,100% { transform: translateX(-50%) scale(1); }
+    50% { transform: translateX(-50%) scale(1.05); }
+  }
+
+  .stack-line {
+    display: block; padding: 8px 12px; margin: 6px auto;
+    background: #1a1a2e; color: #ffd166;
+    border-radius: 10px; border: 3px solid #ffd166;
+    width: max-content; max-width: 86%;
+    transform: rotate(-1.5deg);
+    opacity: 0; animation: dropIn 0.5s ease forwards;
+  }
+  .stack-line:nth-child(2) { animation-delay: 0.4s; transform: rotate(2deg); }
+  .stack-line:nth-child(3) { animation-delay: 0.8s; transform: rotate(-2deg); }
+  .stack-line:nth-child(4) { animation-delay: 1.2s; transform: rotate(1.5deg); }
+  @keyframes dropIn {
+    from { opacity: 0; transform: translateY(-30px) rotate(-6deg); }
+    to { opacity: 1; }
+  }
+
+  .speech-bubble {
+    position: absolute; background: #fff; color: #1a1a2e;
+    padding: 12px 18px; border-radius: 18px;
+    border: 4px solid #1a1a2e;
+    font-weight: 800; font-size: clamp(14px, 2.4vh, 18px);
+    box-shadow: 5px 5px 0 #1a1a2e;
+  }
+  .speech-bubble:after {
+    content: ""; position: absolute;
+    bottom: -16px; left: 30px;
+    border-top: 16px solid #1a1a2e;
+    border-right: 16px solid transparent;
+  }
+
+  .notif {
+    position: absolute; right: 6%;
+    background: #fff; color: #1a1a2e;
+    padding: 8px 12px; border-radius: 12px;
+    border: 3px solid #1a1a2e;
+    font-weight: 800; font-size: clamp(11px, 2vh, 14px);
+    box-shadow: 4px 4px 0 #1a1a2e;
+    opacity: 0;
+  }
+  .notif.show { animation: slideIn 0.5s ease forwards; }
+  @keyframes slideIn {
+    from { transform: translateX(120%); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+  }
+
+  .cta-btn {
+    background: var(--teal); color: #1a1a2e;
+    border-radius: 14px; border: 4px solid #1a1a2e;
+    padding: 14px 22px; font-weight: 900;
+    font-size: clamp(18px, 3.4vh, 28px);
+    box-shadow: 6px 6px 0 #1a1a2e;
+    animation: wiggle 1s ease-in-out infinite;
+    display: inline-block;
+  }
+  @keyframes wiggle {
+    0%,100% { transform: rotate(-2deg); }
+    50% { transform: rotate(2deg); }
+  }
+
+  .footer { color: #6b7280; font-size: 12px; text-align: center; max-width: 480px; }
+
+  .start-overlay {
+    position: absolute; inset: 0; background: rgba(0,0,0,0.55);
+    color: #fff; display: flex; align-items: center; justify-content: center;
+    z-index: 100; cursor: pointer;
+    flex-direction: column; gap: 14px; padding: 24px; text-align: center;
+  }
+  .start-overlay h2 { margin: 0; font-size: 24px; }
+  .start-overlay p { margin: 0; color: #e3e6ee; max-width: 320px; }
+  .start-overlay .big {
+    width: 88px; height: 88px; border-radius: 50%;
+    background: var(--pop); color: #1a1a2e;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 36px; font-weight: 900; border: 4px solid #1a1a2e;
+    box-shadow: 6px 6px 0 #1a1a2e;
+  }
+
+  .hidden { display: none !important; }
+
+  /* Comment ticker */
+  .comment {
+    position: absolute; left: 6%;
+    background: #1a1a2e; color: #fff;
+    padding: 8px 12px; border-radius: 14px 14px 14px 4px;
+    font-weight: 700; font-size: clamp(12px, 2vh, 16px);
+    opacity: 0;
+  }
+  .comment.show { animation: bubbleUp 0.6s ease forwards; }
+  @keyframes bubbleUp {
+    from { transform: translateY(20px); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+  }
+
+</style>
+</head>
+<body>
+
+<div class="stage-wrap">
+  <div class="reel" id="reel">
+    <div class="timer" id="timer">0:00 / 0:42</div>
+    <div class="progress"><i id="bar"></i></div>
+
+    <!-- SCENE 1: HOOK 0:00-0:04 -->
+    <section class="scene sky" data-start="0" data-end="4">
+      <svg viewBox="0 0 360 640" preserveAspectRatio="xMidYMid slice" style="position:absolute;inset:0;width:100%;height:100%">
+        <!-- highway -->
+        <rect x="0" y="430" width="360" height="210" fill="#3d3d3d"/>
+        <rect x="0" y="430" width="360" height="6" fill="#fff"/>
+        <g>
+          <rect x="60" y="500" width="40" height="6" fill="#ffd166"/>
+          <rect x="160" y="500" width="40" height="6" fill="#ffd166"/>
+          <rect x="260" y="500" width="40" height="6" fill="#ffd166"/>
+        </g>
+        <!-- I-275 sign -->
+        <g transform="translate(40,300)">
+          <rect x="0" y="0" width="60" height="60" rx="8" fill="#0a2463" stroke="#fff" stroke-width="3"/>
+          <text x="30" y="26" text-anchor="middle" fill="#fff" font-size="13" font-weight="900">I</text>
+          <text x="30" y="48" text-anchor="middle" fill="#fff" font-size="22" font-weight="900">275</text>
+        </g>
+        <!-- billboard -->
+        <g class="billboard" style="transform-origin:50% 50%; transform: translateX(-50%)">
+          <g transform="translate(140,120)">
+            <rect x="0" y="0" width="180" height="110" rx="6" fill="#fff" stroke="#1a1a2e" stroke-width="4"/>
+            <rect x="6" y="6" width="168" height="98" fill="#ef476f"/>
+            <text x="90" y="42" text-anchor="middle" fill="#fff" font-size="20" font-weight="900">SMITH LAW</text>
+            <text x="90" y="66" text-anchor="middle" fill="#fff" font-size="11" font-weight="700">CALL NOW</text>
+            <text x="90" y="86" text-anchor="middle" fill="#ffd166" font-size="14" font-weight="900">555-LAWYER</text>
+            <rect x="80" y="110" width="20" height="60" fill="#1a1a2e"/>
+          </g>
+        </g>
+        <!-- sun -->
+        <circle cx="300" cy="80" r="30" fill="#ffd166"/>
+        <!-- IG icon ghost -->
+        <g opacity="0.9" transform="translate(170,420)">
+          <rect x="0" y="0" width="40" height="40" rx="10" fill="url(#iggrad)" stroke="#1a1a2e" stroke-width="3"/>
+          <circle cx="20" cy="20" r="8" fill="none" stroke="#fff" stroke-width="3"/>
+          <circle cx="32" cy="8" r="2" fill="#fff"/>
+        </g>
+        <defs>
+          <linearGradient id="iggrad" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#feda75"/>
+            <stop offset="0.5" stop-color="#fa7e1e"/>
+            <stop offset="1" stop-color="#d62976"/>
+          </linearGradient>
+        </defs>
+      </svg>
+      <div class="overlay mid pop-in"><span class="badge">INVISIBLE ONLINE</span><br><br>= INVISIBLE TO CLIENTS</div>
+      <div class="narration">Your law firm has a billboard on I-275… but you're invisible on Instagram. And that's costing you cases.</div>
+    </section>
+
+    <!-- SCENE 2: AGITATE 0:04-0:10 -->
+    <section class="scene grid" data-start="4" data-end="10">
+      <svg viewBox="0 0 360 640" preserveAspectRatio="xMidYMid slice" style="position:absolute;inset:0;width:100%;height:100%">
+        <!-- phone frame -->
+        <g class="phone" style="transform-origin:180px 360px">
+          <rect x="80" y="110" width="200" height="380" rx="32" fill="#1a1a2e" stroke="#000" stroke-width="4"/>
+          <rect x="92" y="140" width="176" height="320" rx="14" fill="#fff8e8"/>
+          <circle cx="180" cy="478" r="8" fill="#fff" stroke="#000" stroke-width="2"/>
+          <!-- search bar -->
+          <rect x="100" y="150" width="160" height="22" rx="11" fill="#eee" stroke="#1a1a2e" stroke-width="2"/>
+          <text x="180" y="166" text-anchor="middle" font-size="10" fill="#1a1a2e" font-weight="700">family lawyer near me</text>
+          <!-- scrolling profiles -->
+          <g clip-path="url(#phoneClip)">
+            <g class="scroll">
+              <!-- profile cards -->
+              <g transform="translate(100,180)">
+                <rect width="160" height="60" rx="8" fill="#fff" stroke="#1a1a2e" stroke-width="2"/>
+                <circle cx="20" cy="30" r="14" fill="#ef476f"/>
+                <rect x="40" y="14" width="100" height="10" fill="#1a1a2e"/>
+                <rect x="40" y="30" width="80" height="6" fill="#9aa3b2"/>
+                <rect x="40" y="42" width="60" height="6" fill="#9aa3b2"/>
+              </g>
+              <g transform="translate(100,250)">
+                <rect width="160" height="60" rx="8" fill="#fff" stroke="#1a1a2e" stroke-width="2"/>
+                <circle cx="20" cy="30" r="14" fill="#06d6a0"/>
+                <rect x="40" y="14" width="100" height="10" fill="#1a1a2e"/>
+                <rect x="40" y="30" width="80" height="6" fill="#9aa3b2"/>
+                <rect x="40" y="42" width="60" height="6" fill="#9aa3b2"/>
+              </g>
+              <g transform="translate(100,320)">
+                <rect width="160" height="60" rx="8" fill="#fff" stroke="#1a1a2e" stroke-width="2"/>
+                <circle cx="20" cy="30" r="14" fill="#118ab2"/>
+                <rect x="40" y="14" width="100" height="10" fill="#1a1a2e"/>
+                <rect x="40" y="30" width="80" height="6" fill="#9aa3b2"/>
+                <rect x="40" y="42" width="60" height="6" fill="#9aa3b2"/>
+              </g>
+              <g transform="translate(100,390)">
+                <rect width="160" height="60" rx="8" fill="#fff" stroke="#1a1a2e" stroke-width="2"/>
+                <circle cx="20" cy="30" r="14" fill="#ffd166"/>
+                <rect x="40" y="14" width="100" height="10" fill="#1a1a2e"/>
+                <rect x="40" y="30" width="80" height="6" fill="#9aa3b2"/>
+                <rect x="40" y="42" width="60" height="6" fill="#9aa3b2"/>
+              </g>
+              <g transform="translate(100,460)">
+                <rect width="160" height="60" rx="8" fill="#fff" stroke="#1a1a2e" stroke-width="2"/>
+                <circle cx="20" cy="30" r="14" fill="#ef476f"/>
+                <rect x="40" y="14" width="100" height="10" fill="#1a1a2e"/>
+                <rect x="40" y="30" width="80" height="6" fill="#9aa3b2"/>
+              </g>
+            </g>
+          </g>
+          <defs>
+            <clipPath id="phoneClip">
+              <rect x="92" y="175" width="176" height="280"/>
+            </clipPath>
+          </defs>
+          <!-- finger -->
+          <g transform="translate(220,300)">
+            <ellipse cx="0" cy="0" rx="22" ry="14" fill="#ffd6a5" stroke="#1a1a2e" stroke-width="2"/>
+            <rect x="-8" y="-30" width="16" height="30" fill="#ffd6a5" stroke="#1a1a2e" stroke-width="2"/>
+          </g>
+        </g>
+      </svg>
+      <div class="overlay top pop-in">TAMPA BAY GOOGLES YOU.<br>WHO DO THEY PICK?</div>
+      <div class="narration">Every day, someone in Tampa Bay Googles "family lawyer near me," opens Instagram, and picks the attorney whose face they recognize.</div>
+    </section>
+
+    <!-- SCENE 3: GAP 0:10-0:19 -->
+    <section class="scene court" data-start="10" data-end="19">
+      <svg viewBox="0 0 360 640" preserveAspectRatio="xMidYMid slice" style="position:absolute;inset:0;width:100%;height:100%">
+        <!-- pillars -->
+        <rect x="20" y="60" width="40" height="500" fill="#fff8e8" opacity="0.85"/>
+        <rect x="300" y="60" width="40" height="500" fill="#fff8e8" opacity="0.85"/>
+        <!-- gavel/scale -->
+        <g transform="translate(160,160)">
+          <rect x="-2" y="0" width="4" height="100" fill="#1a1a2e"/>
+          <circle cx="0" cy="0" r="12" fill="#ffd166" stroke="#1a1a2e" stroke-width="3"/>
+          <line x1="-50" y1="40" x2="50" y2="40" stroke="#1a1a2e" stroke-width="3"/>
+          <g>
+            <line x1="-40" y1="40" x2="-40" y2="56" stroke="#1a1a2e" stroke-width="2"/>
+            <path d="M-56 56 Q-40 86 -24 56 Z" fill="#ffd166" stroke="#1a1a2e" stroke-width="2"/>
+          </g>
+          <g>
+            <line x1="40" y1="40" x2="40" y2="56" stroke="#1a1a2e" stroke-width="2"/>
+            <path d="M24 56 Q40 86 56 56 Z" fill="#ffd166" stroke="#1a1a2e" stroke-width="2"/>
+          </g>
+        </g>
+      </svg>
+      <div class="overlay mid" style="top:30%">
+        <span class="stack-line">BRILLIANT IN COURT.</span>
+        <span class="stack-line">SILENT ONLINE.</span>
+        <span class="stack-line">LOGO PROFILE PIC.</span>
+        <span class="stack-line">3 POSTS FROM 2022.</span>
+      </div>
+      <div class="narration">Here's what I see: brilliant in the courtroom. Silent on social. That's not a brand — that's a business card pretending to be a presence.</div>
+    </section>
+
+    <!-- SCENE 4: OFFER 0:19-0:29 -->
+    <section class="scene room" data-start="19" data-end="29">
+      <svg viewBox="0 0 360 640" preserveAspectRatio="xMidYMid slice" style="position:absolute;inset:0;width:100%;height:100%">
+        <!-- desk -->
+        <rect x="0" y="500" width="360" height="140" fill="#7f5539"/>
+        <rect x="0" y="500" width="360" height="10" fill="#a0683a"/>
+        <!-- monitor -->
+        <g transform="translate(220,300)">
+          <rect width="120" height="80" rx="6" fill="#1a1a2e" stroke="#000" stroke-width="3"/>
+          <rect x="6" y="6" width="108" height="60" fill="#06d6a0"/>
+          <text x="60" y="32" text-anchor="middle" font-size="10" font-weight="900" fill="#1a1a2e">CONTENT</text>
+          <text x="60" y="48" text-anchor="middle" font-size="10" font-weight="900" fill="#1a1a2e">CALENDAR</text>
+          <rect x="50" y="80" width="20" height="14" fill="#333"/>
+          <rect x="36" y="92" width="48" height="6" fill="#333"/>
+        </g>
+        <!-- coffee -->
+        <g transform="translate(60,470)">
+          <rect width="30" height="40" rx="4" fill="#ef476f" stroke="#1a1a2e" stroke-width="3"/>
+          <path d="M30 8 Q44 8 44 22 Q44 36 30 36" fill="none" stroke="#1a1a2e" stroke-width="3"/>
+          <text x="15" y="28" text-anchor="middle" font-size="10" font-weight="900" fill="#fff">FRANTZ</text>
+        </g>
+        <!-- Frantz character -->
+        <g class="lawyer" transform="translate(140,260)">
+          <!-- body -->
+          <rect x="20" y="120" width="80" height="100" rx="14" fill="#118ab2" stroke="#1a1a2e" stroke-width="3"/>
+          <!-- tie -->
+          <polygon points="60,120 54,134 60,160 66,134" fill="#ef476f" stroke="#1a1a2e" stroke-width="2"/>
+          <!-- head -->
+          <circle cx="60" cy="80" r="38" fill="#8d5524" stroke="#1a1a2e" stroke-width="3"/>
+          <!-- hair -->
+          <path d="M25 70 Q60 30 95 70 Q90 56 60 50 Q30 56 25 70Z" fill="#1a1a2e"/>
+          <!-- eyes -->
+          <circle cx="48" cy="80" r="3" fill="#fff"/>
+          <circle cx="72" cy="80" r="3" fill="#fff"/>
+          <circle cx="48" cy="80" r="1.5" fill="#1a1a2e"/>
+          <circle cx="72" cy="80" r="1.5" fill="#1a1a2e"/>
+          <!-- smile -->
+          <path d="M48 96 Q60 106 72 96" stroke="#1a1a2e" stroke-width="3" fill="none" stroke-linecap="round"/>
+          <!-- arm raised -->
+          <rect x="0" y="130" width="22" height="50" rx="8" fill="#118ab2" stroke="#1a1a2e" stroke-width="3" transform="rotate(-25 11 155)"/>
+          <circle cx="-8" cy="120" r="10" fill="#8d5524" stroke="#1a1a2e" stroke-width="3"/>
+        </g>
+        <!-- speech bubble -->
+        <g transform="translate(40,160)">
+          <rect width="180" height="50" rx="14" fill="#fff" stroke="#1a1a2e" stroke-width="4"/>
+          <text x="90" y="22" text-anchor="middle" font-size="11" font-weight="900" fill="#1a1a2e">HI, I'M FRANTZ.</text>
+          <text x="90" y="38" text-anchor="middle" font-size="9" font-weight="700" fill="#1a1a2e">INSIGHT SOCIAL MEDIA MGMT</text>
+        </g>
+        <!-- notifications -->
+        <g transform="translate(250,180)">
+          <rect width="90" height="34" rx="8" fill="#fff" stroke="#1a1a2e" stroke-width="3"/>
+          <text x="45" y="16" text-anchor="middle" font-size="9" font-weight="900" fill="#1a1a2e">NEW LEAD</text>
+          <text x="45" y="28" text-anchor="middle" font-size="8" fill="#1a1a2e">Consultation booked</text>
+        </g>
+      </svg>
+      <div class="overlay top pop-in"><span class="badge">YOUR EXPERTISE → AUTHORITY → CASES</span></div>
+      <div class="narration">I'm Frantz with Insight Social Media Management. We handle the content, the strategy, the posting, the DMs. You handle the cases.</div>
+    </section>
+
+    <!-- SCENE 5: PROOF 0:29-0:36 -->
+    <section class="scene pop-bg" data-start="29" data-end="36">
+      <svg viewBox="0 0 360 640" preserveAspectRatio="xMidYMid slice" style="position:absolute;inset:0;width:100%;height:100%">
+        <!-- map / city pin -->
+        <g transform="translate(40,140)">
+          <rect width="280" height="200" rx="14" fill="#fff" stroke="#1a1a2e" stroke-width="4"/>
+          <path d="M20 40 Q80 20 140 60 Q220 100 260 60" stroke="#9aa3b2" stroke-width="3" fill="none"/>
+          <path d="M20 80 Q80 100 140 80 Q220 60 260 100" stroke="#9aa3b2" stroke-width="3" fill="none"/>
+          <path d="M20 140 Q100 160 180 130 Q220 110 260 150" stroke="#9aa3b2" stroke-width="3" fill="none"/>
+          <text x="20" y="180" font-size="12" font-weight="900" fill="#1a1a2e">TAMPA BAY</text>
+          <!-- pin -->
+          <g transform="translate(150,80)" class="pulse" style="transform-origin:center">
+            <path d="M0 0 C-14 -14 -14 -34 0 -50 C14 -34 14 -14 0 0Z" fill="#ef476f" stroke="#1a1a2e" stroke-width="3"/>
+            <circle cx="0" cy="-30" r="6" fill="#fff" stroke="#1a1a2e" stroke-width="2"/>
+          </g>
+        </g>
+        <!-- target -->
+        <g transform="translate(180,470)">
+          <circle r="60" fill="#fff" stroke="#1a1a2e" stroke-width="4"/>
+          <circle r="42" fill="#ef476f" stroke="#1a1a2e" stroke-width="3"/>
+          <circle r="22" fill="#ffd166" stroke="#1a1a2e" stroke-width="3"/>
+          <circle r="6" fill="#1a1a2e"/>
+          <!-- arrow -->
+          <line x1="-90" y1="-60" x2="-6" y2="-6" stroke="#1a1a2e" stroke-width="5"/>
+          <polygon points="-12,-2 -2,-12 -2,4" fill="#1a1a2e"/>
+        </g>
+      </svg>
+      <div class="overlay top pop-in">NOT GENERIC.<br>SOUNDS LIKE YOU.<br><span class="badge" style="margin-top:8px;">RANKS FOR YOUR CITY</span></div>
+      <div class="narration">We build a footprint that sounds like you, ranks for your city, and pulls in the exact clients you want to sign.</div>
+    </section>
+
+    <!-- SCENE 6: CTA 0:36-0:42 -->
+    <section class="scene night" data-start="36" data-end="42">
+      <svg viewBox="0 0 360 640" preserveAspectRatio="xMidYMid slice" style="position:absolute;inset:0;width:100%;height:100%">
+        <!-- sparkles -->
+        <g fill="#ffd166">
+          <circle cx="40" cy="80" r="3"/>
+          <circle cx="320" cy="120" r="2"/>
+          <circle cx="60" cy="220" r="2"/>
+          <circle cx="300" cy="300" r="3"/>
+          <circle cx="50" cy="500" r="2"/>
+          <circle cx="310" cy="540" r="3"/>
+        </g>
+        <!-- big phone with comments -->
+        <g transform="translate(80,90)">
+          <rect width="200" height="380" rx="28" fill="#1a1a2e" stroke="#ffd166" stroke-width="4"/>
+          <rect x="10" y="40" width="180" height="300" rx="10" fill="#fff8e8"/>
+          <text x="100" y="68" text-anchor="middle" font-size="14" font-weight="900" fill="#1a1a2e">COMMENTS</text>
+          <line x1="20" y1="78" x2="180" y2="78" stroke="#1a1a2e" stroke-width="2"/>
+        </g>
+      </svg>
+      <div class="comment" id="c1" style="top:25%">AUTHORITY</div>
+      <div class="comment" id="c2" style="top:36%">AUTHORITY</div>
+      <div class="comment" id="c3" style="top:47%">AUTHORITY 🔥</div>
+      <div class="comment" id="c4" style="top:58%">AUTHORITY</div>
+      <div class="overlay" style="bottom:14%; top:auto;">
+        <span class="cta-btn">Comment "AUTHORITY"</span>
+      </div>
+      <div class="narration">Tired of being the best-kept secret in Tampa Bay? Comment AUTHORITY — I'll send our free law firm content audit. No pitch. Just clarity.</div>
+    </section>
+
+    <div class="start-overlay" id="startOverlay">
+      <div class="big">▶</div>
+      <h2>Insight Social Media — Law Firm Reel</h2>
+      <p>42-second cartoon reel for Tampa Bay attorneys. Tap to play (voiceover uses your browser's speech).</p>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button class="play" id="playBtn">Play Reel</button>
+    <button class="play" id="restartBtn" style="background:#1a1a2e;color:#ffd166;">Restart</button>
+    <span class="meta" id="status">Ready</span>
+  </div>
+  <div class="footer">Cartoon animation reel · 9:16 · ~42 seconds · Built for Insight Social Media Management</div>
+</div>
+
+<script>
+  const NARRATION = [
+    { t: 0,  text: "Your law firm has a billboard on I-275, but you're invisible on Instagram. And that's costing you cases." },
+    { t: 4,  text: "Every day, someone in Tampa Bay Googles family lawyer near me, opens Instagram, and picks the attorney whose face they recognize. That used to be the lawyer with the biggest ad budget. Now it's the one who shows up consistently with content that proves they know their stuff." },
+    { t: 10, text: "Here's what I see with most attorneys. Brilliant in the courtroom. Silent on social. A logo for a profile picture. Three posts from 2022. And a bio that just says Attorney at Law. That's not a brand. That's a business card pretending to be a presence." },
+    { t: 19, text: "I'm Frantz with Insight Social Media Management. I help law firms in Tampa Bay turn their expertise into authority, and their authority into booked consultations. We handle the content, the strategy, the posting, the DMs. You handle the cases. That's it." },
+    { t: 29, text: "We don't do generic law firm content. We build a footprint that sounds like you, ranks for your city, and pulls in the exact clients you want to sign." },
+    { t: 36, text: "If you're an attorney in Tampa Bay and you're tired of being the best-kept secret in your practice area, comment AUTHORITY and I'll send you our law firm content audit. Free. No pitch. Just clarity." }
+  ];
+
+  const TOTAL = 42;
+  const scenes = Array.from(document.querySelectorAll('.scene'));
+  const bar = document.getElementById('bar');
+  const timer = document.getElementById('timer');
+  const startOverlay = document.getElementById('startOverlay');
+  const playBtn = document.getElementById('playBtn');
+  const restartBtn = document.getElementById('restartBtn');
+  const status = document.getElementById('status');
+  const commentsIds = ['c1','c2','c3','c4'];
+
+  let startTime = null;
+  let rafId = null;
+  let lastNarrationIdx = -1;
+
+  function fmt(t) {
+    const m = Math.floor(t/60), s = Math.floor(t%60);
+    return m + ':' + (s<10?'0':'') + s;
+  }
+
+  function showScene(currentTime) {
+    let activeIdx = 0;
+    scenes.forEach((s, i) => {
+      const a = +s.dataset.start, b = +s.dataset.end;
+      if (currentTime >= a && currentTime < b) activeIdx = i;
+    });
+    scenes.forEach((s, i) => {
+      if (i === activeIdx) s.classList.add('scene-active');
+      else s.classList.remove('scene-active');
+    });
+
+    // Trigger comments in scene 6
+    if (activeIdx === 5) {
+      const dt = currentTime - 36;
+      commentsIds.forEach((id, k) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        if (dt > 0.6 + k * 0.9) el.classList.add('show');
+      });
+    } else {
+      commentsIds.forEach(id => document.getElementById(id)?.classList.remove('show'));
+    }
+  }
+
+  function speakLine(idx) {
+    if (!('speechSynthesis' in window)) return;
+    const line = NARRATION[idx];
+    if (!line) return;
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(line.text);
+    u.rate = 1.05; u.pitch = 1.0; u.volume = 1.0;
+    const voices = window.speechSynthesis.getVoices();
+    const en = voices.find(v => /en-US|en_US|English/i.test(v.lang) && /Male|David|Daniel|Alex|Fred/i.test(v.name))
+             || voices.find(v => /en-US|en_US|English/i.test(v.lang))
+             || voices[0];
+    if (en) u.voice = en;
+    window.speechSynthesis.speak(u);
+  }
+
+  function tick(ts) {
+    if (!startTime) startTime = ts;
+    const elapsed = (ts - startTime) / 1000;
+    if (elapsed >= TOTAL) {
+      bar.style.width = '100%';
+      timer.textContent = fmt(TOTAL) + ' / ' + fmt(TOTAL);
+      status.textContent = 'Done';
+      window.speechSynthesis.cancel();
+      return;
+    }
+    bar.style.width = (elapsed / TOTAL * 100).toFixed(2) + '%';
+    timer.textContent = fmt(elapsed) + ' / ' + fmt(TOTAL);
+    showScene(elapsed);
+
+    // Trigger narration at each cue
+    const cueIdx = NARRATION.findIndex((c, i) => {
+      const next = NARRATION[i+1]?.t ?? TOTAL;
+      return elapsed >= c.t && elapsed < next;
+    });
+    if (cueIdx !== -1 && cueIdx !== lastNarrationIdx) {
+      lastNarrationIdx = cueIdx;
+      speakLine(cueIdx);
+    }
+
+    rafId = requestAnimationFrame(tick);
+  }
+
+  function start() {
+    cancelAnimationFrame(rafId);
+    window.speechSynthesis?.cancel();
+    startTime = null;
+    lastNarrationIdx = -1;
+    startOverlay.classList.add('hidden');
+    status.textContent = 'Playing...';
+    // Warm up voices on first user gesture
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.getVoices();
+    }
+    rafId = requestAnimationFrame(tick);
+  }
+
+  playBtn.addEventListener('click', start);
+  restartBtn.addEventListener('click', start);
+  startOverlay.addEventListener('click', start);
+
+  // Pre-show scene 1
+  scenes[0].classList.add('scene-active');
+
+  // Some browsers need a voices "voiceschanged" event before they list voices
+  if ('speechSynthesis' in window) {
+    window.speechSynthesis.onvoiceschanged = () => {};
+  }
+</script>
+</body>
+</html>
