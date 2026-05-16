@@ -1,7 +1,8 @@
 <?php
 /**
- * SEO Scorer Class
- * Calculates SEO score for a WordPress post based on 10 criteria.
+ * SEO Scorer — calculates a 0–100 SEO score for a WordPress post.
+ *
+ * @package Insight_SEO_Agent
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -14,7 +15,7 @@ class Insight_SEO_Scorer {
      * Calculate SEO score for a post.
      *
      * @param int $post_id
-     * @return array
+     * @return array{total: int, criteria: array, focus_keyword: string}
      */
     public function calculate( $post_id ) {
         $post = get_post( $post_id );
@@ -26,183 +27,198 @@ class Insight_SEO_Scorer {
         $content = $post->post_content;
         $slug    = $post->post_name;
 
-        // Determine focus keyword
-        $focus_keyword = get_post_meta( $post_id, '_yoast_wpseo_focuskw', true );
-        if ( empty( $focus_keyword ) ) {
-            $focus_keyword = $this->extract_keyword( $title, $content );
-        }
+        // Detect focus keyword
+        $keyword = $this->detect_focus_keyword( $post_id, $title, $content );
 
-        $meta_desc   = $this->get_meta_desc( $post_id );
-        $word_count  = $this->word_count( $content );
-        $title_len   = strlen( $title );
-        $meta_len    = strlen( $meta_desc );
+        $meta_desc  = $this->get_meta_desc( $post_id );
+        $word_count = $this->word_count( $content );
+        $kw_density = $this->keyword_density( $content, $keyword );
 
         $criteria = [];
         $total    = 0;
 
         // 1. Title contains focus keyword (15 pts)
-        $passed = ! empty( $focus_keyword ) && stripos( $title, $focus_keyword ) !== false;
+        $passed = ! empty( $keyword ) && stripos( $title, $keyword ) !== false;
         $score  = $passed ? 15 : 0;
-        $total += $score;
         $criteria[] = [
             'name'   => 'Title contains focus keyword',
             'score'  => $score,
             'max'    => 15,
             'passed' => $passed,
         ];
-
-        // 2. Title length 50–60 chars (10 pts, partial 5 pts for 40–70)
-        if ( $title_len >= 50 && $title_len <= 60 ) {
-            $score = 10;
-        } elseif ( $title_len >= 40 && $title_len <= 70 ) {
-            $score = 5;
-        } else {
-            $score = 0;
-        }
         $total += $score;
+
+        // 2. Title length 50–60 chars (10 pts, partial 5 for 40–70)
+        $title_len = mb_strlen( $title );
+        if ( $title_len >= 50 && $title_len <= 60 ) {
+            $score  = 10;
+            $passed = true;
+        } elseif ( $title_len >= 40 && $title_len <= 70 ) {
+            $score  = 5;
+            $passed = false;
+        } else {
+            $score  = 0;
+            $passed = false;
+        }
         $criteria[] = [
-            'name'   => 'Title length 50–60 chars',
+            'name'   => 'Title length 50–60 characters',
             'score'  => $score,
             'max'    => 10,
-            'passed' => ( $title_len >= 50 && $title_len <= 60 ),
-            'detail' => $title_len . ' chars',
+            'passed' => $passed,
         ];
-
-        // 3. Meta description with keyword (15 pts)
-        $passed = ! empty( $focus_keyword ) && ! empty( $meta_desc ) && stripos( $meta_desc, $focus_keyword ) !== false;
-        $score  = $passed ? 15 : 0;
         $total += $score;
+
+        // 3. Meta description contains keyword (15 pts)
+        $passed = ! empty( $keyword ) && ! empty( $meta_desc ) && stripos( $meta_desc, $keyword ) !== false;
+        $score  = $passed ? 15 : 0;
         $criteria[] = [
-            'name'   => 'Meta description contains keyword',
+            'name'   => 'Meta description contains focus keyword',
             'score'  => $score,
             'max'    => 15,
             'passed' => $passed,
         ];
-
-        // 4. Meta description 150–160 chars (5 pts, partial 3 pts for 130–180)
-        if ( $meta_len >= 150 && $meta_len <= 160 ) {
-            $score = 5;
-        } elseif ( $meta_len >= 130 && $meta_len <= 180 ) {
-            $score = 3;
-        } else {
-            $score = 0;
-        }
         $total += $score;
+
+        // 4. Meta description 150–160 chars (5 pts, partial 3 for 130–180)
+        $meta_len = mb_strlen( $meta_desc );
+        if ( $meta_len >= 150 && $meta_len <= 160 ) {
+            $score  = 5;
+            $passed = true;
+        } elseif ( $meta_len >= 130 && $meta_len <= 180 ) {
+            $score  = 3;
+            $passed = false;
+        } else {
+            $score  = 0;
+            $passed = false;
+        }
         $criteria[] = [
-            'name'   => 'Meta description length 150–160 chars',
+            'name'   => 'Meta description 150–160 characters',
             'score'  => $score,
             'max'    => 5,
-            'passed' => ( $meta_len >= 150 && $meta_len <= 160 ),
-            'detail' => $meta_len . ' chars',
+            'passed' => $passed,
         ];
-
-        // 5. Content ≥ 600 words (15 pts, partial 8 pts for 300–599)
-        if ( $word_count >= 600 ) {
-            $score = 15;
-        } elseif ( $word_count >= 300 ) {
-            $score = 8;
-        } else {
-            $score = 0;
-        }
         $total += $score;
+
+        // 5. Content >= 600 words (15 pts, partial 8 for 300–599)
+        if ( $word_count >= 600 ) {
+            $score  = 15;
+            $passed = true;
+        } elseif ( $word_count >= 300 ) {
+            $score  = 8;
+            $passed = false;
+        } else {
+            $score  = 0;
+            $passed = false;
+        }
         $criteria[] = [
-            'name'   => 'Content length ≥ 600 words',
+            'name'   => 'Content length >= 600 words',
             'score'  => $score,
             'max'    => 15,
-            'passed' => $word_count >= 600,
-            'detail' => $word_count . ' words',
+            'passed' => $passed,
         ];
+        $total += $score;
 
         // 6. Keyword density 1–3% (15 pts)
-        $density = 0;
-        if ( ! empty( $focus_keyword ) && $word_count > 0 ) {
-            $plain_content = strtolower( strip_tags( $content ) );
-            $keyword_lower = strtolower( $focus_keyword );
-            $occurrences   = substr_count( $plain_content, $keyword_lower );
-            $density       = ( $occurrences / $word_count ) * 100;
-        }
-        $passed = $density >= 1 && $density <= 3;
+        $passed = $kw_density >= 1.0 && $kw_density <= 3.0;
         $score  = $passed ? 15 : 0;
-        $total += $score;
         $criteria[] = [
             'name'   => 'Keyword density 1–3%',
             'score'  => $score,
             'max'    => 15,
             'passed' => $passed,
-            'detail' => round( $density, 2 ) . '%',
+            'detail' => round( $kw_density, 2 ) . '%',
         ];
-
-        // 7. H2/H3 headers in content (10 pts, partial 5 pts for 1 header)
-        preg_match_all( '/<h[23][^>]*>/i', $content, $header_matches );
-        $header_count = count( $header_matches[0] );
-        if ( $header_count >= 2 ) {
-            $score = 10;
-        } elseif ( $header_count === 1 ) {
-            $score = 5;
-        } else {
-            $score = 0;
-        }
         $total += $score;
+
+        // 7. H2/H3 headers in content (10 pts, partial 5 for just 1)
+        preg_match_all( '/<h[23][^>]*>/i', $content, $headers );
+        $header_count = count( $headers[0] );
+        if ( $header_count >= 2 ) {
+            $score  = 10;
+            $passed = true;
+        } elseif ( $header_count === 1 ) {
+            $score  = 5;
+            $passed = false;
+        } else {
+            $score  = 0;
+            $passed = false;
+        }
         $criteria[] = [
-            'name'   => 'H2/H3 headers present',
+            'name'   => 'H2/H3 headers present in content',
             'score'  => $score,
             'max'    => 10,
-            'passed' => $header_count >= 2,
-            'detail' => $header_count . ' headers found',
+            'passed' => $passed,
         ];
+        $total += $score;
 
         // 8. Images with alt text (5 pts)
-        preg_match_all( '/<img[^>]+>/i', $content, $img_matches );
-        $imgs_with_alt = 0;
-        foreach ( $img_matches[0] as $img_tag ) {
-            if ( preg_match( '/alt=["\']([^"\']+)["\']/i', $img_tag ) ) {
-                $imgs_with_alt++;
-            }
-        }
-        $passed = $imgs_with_alt > 0;
-        $score  = $passed ? 5 : 0;
-        $total += $score;
+        preg_match_all( '/<img[^>]+alt=["\']([^"\']+)["\'][^>]*>/i', $content, $alts );
+        $has_alt_img = ! empty( $alts[1] ) && ! empty( array_filter( $alts[1] ) );
+        $score       = $has_alt_img ? 5 : 0;
         $criteria[] = [
-            'name'   => 'Images with alt text',
+            'name'   => 'Images have alt text',
             'score'  => $score,
             'max'    => 5,
-            'passed' => $passed,
-            'detail' => $imgs_with_alt . ' image(s) with alt',
+            'passed' => $has_alt_img,
         ];
+        $total += $score;
 
         // 9. Featured image set (5 pts)
-        $passed = has_post_thumbnail( $post_id );
-        $score  = $passed ? 5 : 0;
-        $total += $score;
+        $has_thumb = has_post_thumbnail( $post_id );
+        $score     = $has_thumb ? 5 : 0;
         $criteria[] = [
             'name'   => 'Featured image set',
             'score'  => $score,
             'max'    => 5,
-            'passed' => $passed,
+            'passed' => $has_thumb,
         ];
+        $total += $score;
 
         // 10. Slug contains keyword (5 pts)
-        $keyword_slug = ! empty( $focus_keyword ) ? str_replace( ' ', '-', strtolower( $focus_keyword ) ) : '';
-        $passed       = ! empty( $keyword_slug ) && stripos( $slug, $keyword_slug ) !== false;
-        $score        = $passed ? 5 : 0;
-        $total += $score;
+        $kw_slug = str_replace( ' ', '-', strtolower( $keyword ) );
+        $passed  = ! empty( $keyword ) && ! empty( $slug ) && stripos( $slug, $kw_slug ) !== false;
+        $score   = $passed ? 5 : 0;
         $criteria[] = [
-            'name'   => 'Slug contains keyword',
+            'name'   => 'URL slug contains keyword',
             'score'  => $score,
             'max'    => 5,
             'passed' => $passed,
-            'detail' => $slug,
         ];
+        $total += $score;
 
         return [
-            'total'         => $total,
+            'total'         => min( 100, $total ),
             'criteria'      => $criteria,
-            'focus_keyword' => $focus_keyword,
+            'focus_keyword' => $keyword,
+            'word_count'    => $word_count,
+            'kw_density'    => round( $kw_density, 2 ),
         ];
     }
 
     /**
-     * Extract the most frequent meaningful keyword from title and content.
+     * Detect focus keyword from Yoast meta, falling back to auto-detection.
+     *
+     * @param int    $post_id
+     * @param string $title
+     * @param string $content
+     * @return string
+     */
+    private function detect_focus_keyword( $post_id, $title, $content ) {
+        $yoast_kw = get_post_meta( $post_id, '_yoast_wpseo_focuskw', true );
+        if ( ! empty( $yoast_kw ) ) {
+            return sanitize_text_field( $yoast_kw );
+        }
+
+        $internal_kw = get_post_meta( $post_id, '_insight_seo_focus_keyword', true );
+        if ( ! empty( $internal_kw ) ) {
+            return sanitize_text_field( $internal_kw );
+        }
+
+        return $this->extract_keyword( $title, $content );
+    }
+
+    /**
+     * Extract the most meaningful keyword from title + content.
      *
      * @param string $title
      * @param string $content
@@ -210,37 +226,47 @@ class Insight_SEO_Scorer {
      */
     public function extract_keyword( $title, $content ) {
         $stopwords = [
-            'the', 'and', 'for', 'are', 'but', 'not', 'you', 'all', 'any', 'can', 'had', 'her',
-            'was', 'one', 'our', 'out', 'day', 'get', 'has', 'him', 'his', 'how', 'man', 'new',
-            'now', 'old', 'see', 'two', 'way', 'who', 'boy', 'did', 'its', 'let', 'put', 'say',
-            'she', 'too', 'use', 'with', 'this', 'that', 'have', 'from', 'they', 'will', 'been',
-            'said', 'each', 'what', 'which', 'their', 'time', 'more', 'very', 'when', 'come',
-            'here', 'just', 'like', 'long', 'make', 'many', 'over', 'such', 'take', 'than',
-            'them', 'well', 'were', 'your', 'also', 'back', 'into', 'than', 'then', 'some',
-            'about', 'after', 'before', 'could', 'first', 'great', 'other', 'people', 'should',
-            'there', 'these', 'think', 'those', 'through', 'where', 'while', 'would',
+            'the', 'and', 'for', 'are', 'but', 'not', 'you', 'all',
+            'can', 'had', 'her', 'was', 'one', 'our', 'out', 'day',
+            'get', 'has', 'him', 'his', 'how', 'its', 'let', 'may',
+            'new', 'now', 'old', 'see', 'two', 'use', 'way', 'who',
+            'did', 'yes', 'yet', 'any', 'big', 'say', 'she', 'too',
+            'with', 'that', 'this', 'from', 'they', 'have', 'what',
+            'been', 'when', 'your', 'more', 'also', 'into', 'will',
+            'just', 'like', 'them', 'time', 'some', 'very', 'than',
+            'then', 'each', 'much', 'only', 'most', 'such', 'made',
+            'here', 'were', 'make', 'over', 'does', 'well', 'even',
+            'back', 'good', 'many', 'word', 'know', 'take', 'where',
+            'give', 'their', 'these', 'those', 'about', 'after',
+            'could', 'other', 'being', 'while', 'should', 'because',
+            'there', 'which', 'would', 'often', 'every', 'great',
+            'post', 'page', 'content', 'wordpress',
         ];
 
-        $text = $title . ' ' . strip_tags( $content );
+        // Weight title more heavily
+        $text = $title . ' ' . $title . ' ' . wp_strip_all_tags( $content );
         $text = strtolower( preg_replace( '/[^a-zA-Z\s]/', ' ', $text ) );
-        $words = preg_split( '/\s+/', $text );
 
-        $freq = [];
+        $words = preg_split( '/\s+/', $text, -1, PREG_SPLIT_NO_EMPTY );
+        $freq  = [];
+
         foreach ( $words as $word ) {
-            $word = trim( $word );
             if ( strlen( $word ) < 4 ) {
                 continue;
             }
             if ( in_array( $word, $stopwords, true ) ) {
                 continue;
             }
-            $freq[ $word ] = ( $freq[ $word ] ?? 0 ) + 1;
+            $freq[ $word ] = isset( $freq[ $word ] ) ? $freq[ $word ] + 1 : 1;
+        }
+
+        if ( empty( $freq ) ) {
+            return '';
         }
 
         arsort( $freq );
-        $top = array_keys( array_slice( $freq, 0, 1 ) );
-
-        return $top[0] ?? '';
+        $keys = array_keys( $freq );
+        return (string) $keys[0];
     }
 
     /**
@@ -250,7 +276,7 @@ class Insight_SEO_Scorer {
      * @return int
      */
     public function word_count( $html ) {
-        $text = strip_tags( $html );
+        $text = wp_strip_all_tags( $html );
         $text = trim( preg_replace( '/\s+/', ' ', $text ) );
         if ( empty( $text ) ) {
             return 0;
@@ -259,16 +285,40 @@ class Insight_SEO_Scorer {
     }
 
     /**
-     * Get meta description for a post (Yoast or fallback).
+     * Calculate keyword density (percentage).
+     *
+     * @param string $html
+     * @param string $keyword
+     * @return float
+     */
+    private function keyword_density( $html, $keyword ) {
+        if ( empty( $keyword ) ) {
+            return 0.0;
+        }
+
+        $text       = strtolower( wp_strip_all_tags( $html ) );
+        $word_count = $this->word_count( $html );
+
+        if ( $word_count === 0 ) {
+            return 0.0;
+        }
+
+        $occurrences = substr_count( $text, strtolower( $keyword ) );
+        return ( $occurrences / $word_count ) * 100;
+    }
+
+    /**
+     * Get meta description for a post.
      *
      * @param int $post_id
      * @return string
      */
     public function get_meta_desc( $post_id ) {
-        $desc = get_post_meta( $post_id, '_yoast_wpseo_metadesc', true );
-        if ( empty( $desc ) ) {
-            $desc = get_post_meta( $post_id, '_insight_seo_metadesc', true );
+        $yoast = get_post_meta( $post_id, '_yoast_wpseo_metadesc', true );
+        if ( ! empty( $yoast ) ) {
+            return (string) $yoast;
         }
-        return (string) $desc;
+
+        return (string) get_post_meta( $post_id, '_insight_seo_metadesc', true );
     }
 }

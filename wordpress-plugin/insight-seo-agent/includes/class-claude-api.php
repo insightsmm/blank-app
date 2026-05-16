@@ -1,7 +1,8 @@
 <?php
 /**
- * Claude API Class
- * Handles communication with the Anthropic Claude API.
+ * Claude API — communicates with the Anthropic Claude API to optimise post content for SEO.
+ *
+ * @package Insight_SEO_Agent
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -10,119 +11,107 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 class Insight_SEO_Claude_API {
 
-    /**
-     * @var string API key
-     */
+    /** @var string */
     private $api_key;
 
-    /**
-     * @var string Model to use
-     */
+    /** @var string */
     private $model;
 
-    /**
-     * @var string API endpoint
-     */
-    const API_ENDPOINT = 'https://api.anthropic.com/v1/messages';
+    /** @var string */
+    private $api_endpoint = 'https://api.anthropic.com/v1/messages';
 
     /**
      * Constructor.
      *
-     * @param string $api_key
-     * @param string $model
+     * @param string $api_key  Anthropic API key.
+     * @param string $model    Claude model identifier.
      */
     public function __construct( $api_key, $model = 'claude-opus-4-7' ) {
-        $this->api_key = $api_key;
-        $this->model   = $model;
+        $this->api_key = sanitize_text_field( $api_key );
+        $this->model   = sanitize_text_field( $model );
     }
 
     /**
-     * Optimize post content for SEO.
+     * Optimize a WordPress post for SEO using Claude.
      *
-     * @param string $title
-     * @param string $content_html
-     * @param string $slug
-     * @param string $focus_keyword
-     * @return array|WP_Error
+     * @param string $title           Post title.
+     * @param string $content_html    Post content (HTML).
+     * @param string $slug            Post slug.
+     * @param string $focus_keyword   Optional current focus keyword.
+     * @return array|WP_Error Decoded JSON array or WP_Error on failure.
      */
     public function optimize_post( $title, $content_html, $slug, $focus_keyword = '' ) {
-        $prompt = $this->build_optimization_prompt( $title, $content_html, $slug, $focus_keyword );
+        if ( empty( $this->api_key ) ) {
+            return new WP_Error( 'no_api_key', 'Claude API key is not configured.' );
+        }
 
-        $body = [
-            'model'      => $this->model,
-            'max_tokens' => 4096,
-            'system'     => 'You are an expert SEO content optimizer. Return ONLY valid JSON, no markdown, no code fences, no explanations. The response must start with { and end with }.',
-            'messages'   => [
-                [
-                    'role'    => 'user',
-                    'content' => $prompt,
-                ],
-            ],
-        ];
+        $prompt = $this->build_seo_prompt( $title, $content_html, $slug, $focus_keyword );
 
-        $response = wp_remote_post( self::API_ENDPOINT, [
-            'timeout' => 60,
+        $response = wp_remote_post( $this->api_endpoint, [
+            'timeout' => 90,
             'headers' => [
                 'x-api-key'         => $this->api_key,
                 'anthropic-version' => '2023-06-01',
                 'content-type'      => 'application/json',
             ],
-            'body'    => wp_json_encode( $body ),
+            'body' => wp_json_encode( [
+                'model'      => $this->model,
+                'max_tokens' => 4096,
+                'system'     => 'You are an expert SEO content optimizer. Return ONLY valid JSON, no markdown fences, no explanation — just the raw JSON object.',
+                'messages'   => [
+                    [
+                        'role'    => 'user',
+                        'content' => $prompt,
+                    ],
+                ],
+            ] ),
         ] );
 
         if ( is_wp_error( $response ) ) {
-            return $response;
+            return new WP_Error(
+                'api_request_failed',
+                'Claude API request failed: ' . $response->get_error_message()
+            );
         }
 
-        $http_code = wp_remote_retrieve_response_code( $response );
-        $body_raw  = wp_remote_retrieve_body( $response );
+        $status_code = wp_remote_retrieve_response_code( $response );
+        $body        = wp_remote_retrieve_body( $response );
 
-        if ( $http_code !== 200 ) {
-            $error_data = json_decode( $body_raw, true );
+        if ( $status_code !== 200 ) {
+            $error_data = json_decode( $body, true );
             $error_msg  = isset( $error_data['error']['message'] )
                 ? $error_data['error']['message']
-                : 'HTTP error ' . $http_code;
-            return new WP_Error( 'claude_api_error', $error_msg, [ 'status' => $http_code ] );
+                : 'HTTP ' . $status_code;
+            return new WP_Error( 'api_error', 'Claude API error: ' . $error_msg );
         }
 
-        $response_data = json_decode( $body_raw, true );
+        $response_data = json_decode( $body, true );
 
         if ( ! isset( $response_data['content'][0]['text'] ) ) {
-            return new WP_Error( 'claude_parse_error', 'Unexpected API response structure' );
+            return new WP_Error( 'invalid_response', 'Unexpected Claude API response format.' );
         }
 
         $text = trim( $response_data['content'][0]['text'] );
 
-        // Strip markdown code fences if Claude added them anyway
+        // Strip markdown code fences if present
         $text = preg_replace( '/^```(?:json)?\s*/i', '', $text );
-        $text = preg_replace( '/\s*```\s*$/i', '', $text );
+        $text = preg_replace( '/\s*```$/', '', $text );
         $text = trim( $text );
 
         $decoded = json_decode( $text, true );
 
         if ( json_last_error() !== JSON_ERROR_NONE ) {
-            // Try to extract JSON object from the text
-            if ( preg_match( '/\{[\s\S]*\}/m', $text, $matches ) ) {
-                $decoded = json_decode( $matches[0], true );
-            }
-        }
-
-        if ( ! is_array( $decoded ) ) {
             return new WP_Error(
-                'claude_json_error',
-                'Failed to parse JSON from Claude response: ' . json_last_error_msg(),
-                [ 'raw' => substr( $text, 0, 500 ) ]
+                'json_parse_error',
+                'Failed to parse Claude response as JSON: ' . json_last_error_msg() . '. Raw: ' . substr( $text, 0, 300 )
             );
         }
 
         // Validate required keys
-        $required = [ 'focus_keyword', 'optimized_title', 'meta_description', 'optimized_content', 'suggested_slug' ];
-        foreach ( $required as $key ) {
+        $required_keys = [ 'focus_keyword', 'optimized_title', 'meta_description', 'optimized_content' ];
+        foreach ( $required_keys as $key ) {
             if ( ! isset( $decoded[ $key ] ) ) {
-                return new WP_Error(
-                    'claude_missing_key',
-                    "Missing required key in Claude response: {$key}"
-                );
+                return new WP_Error( 'missing_key', "Claude response missing required key: {$key}" );
             }
         }
 
@@ -130,7 +119,7 @@ class Insight_SEO_Claude_API {
     }
 
     /**
-     * Build the SEO optimization prompt.
+     * Build the SEO optimisation prompt.
      *
      * @param string $title
      * @param string $content_html
@@ -138,76 +127,95 @@ class Insight_SEO_Claude_API {
      * @param string $focus_keyword
      * @return string
      */
-    private function build_optimization_prompt( $title, $content_html, $slug, $focus_keyword ) {
-        // Truncate very long content to avoid token limits
-        $content_preview = strlen( $content_html ) > 6000
-            ? substr( $content_html, 0, 6000 ) . '...[content truncated]'
-            : $content_html;
+    private function build_seo_prompt( $title, $content_html, $slug, $focus_keyword ) {
+        // Truncate content if very long to stay within token limits
+        $max_content_chars = 6000;
+        if ( strlen( $content_html ) > $max_content_chars ) {
+            $content_html = substr( $content_html, 0, $max_content_chars ) . '... [content truncated]';
+        }
 
-        return "Optimize this WordPress post for SEO. Return ONLY a valid JSON object with these exact keys:
-- focus_keyword: string (1-3 word target keyword, most relevant to the content)
-- optimized_title: string (50-60 chars, keyword near start, compelling and click-worthy)
-- meta_description: string (150-160 chars, includes keyword and a call-to-action, no quotes)
-- optimized_content: string (full HTML content with proper H2/H3 structure, keyword in first 100 words, keyword used naturally 2-3 times per 300 words, at least 600 words total, use <h2> and <h3> tags, use <p> tags for paragraphs, do NOT include images)
-- suggested_slug: string (lowercase, hyphens only, keyword-based, no special chars)
-- seo_notes: string (brief explanation of key changes made)
+        return "Optimize this WordPress post for SEO. Return ONLY a valid JSON object with these exact keys (no markdown, no extra text):
 
-Current title: {$title}
-Current slug: {$slug}
-Current focus keyword: {$focus_keyword}
+{
+  \"focus_keyword\": \"(1-3 word target keyword)\",
+  \"optimized_title\": \"(50-60 chars, keyword near start)\",
+  \"meta_description\": \"(150-160 chars, includes keyword and a call-to-action)\",
+  \"optimized_content\": \"(full HTML content with proper H2/H3 structure, keyword in first 100 words, keyword used naturally 2-3x per 300 words, at least 600 words total)\",
+  \"suggested_slug\": \"(lowercase, hyphens, keyword-based, no stop words)\",
+  \"seo_notes\": \"(brief explanation of key changes made)\"
+}
 
-Content:
-{$content_preview}
+Requirements for optimized_content:
+- Must be valid HTML with proper paragraph tags
+- Include at least 2 H2 or H3 subheadings
+- At least 600 words
+- Use the focus keyword naturally 2-3 times per 300 words
+- Include the focus keyword within the first 100 words
+- Do NOT use markdown — use HTML tags only
 
-Remember: Return ONLY the JSON object, starting with { and ending with }. No markdown fences.";
+Current title: " . $title . "
+Current slug: " . $slug . "
+Current focus keyword: " . ( $focus_keyword ?: '(not set — please determine the best keyword)' ) . "
+
+Current content:
+" . $content_html;
     }
 
     /**
-     * Test connection to the Claude API.
+     * Test the Claude API connection.
      *
-     * @return bool|string True on success, error message on failure.
+     * @return array{success: bool, message: string}
      */
     public function test_connection() {
         if ( empty( $this->api_key ) ) {
-            return 'No API key provided';
+            return [ 'success' => false, 'message' => 'API key not configured.' ];
         }
 
-        $body = [
-            'model'      => $this->model,
-            'max_tokens' => 10,
-            'messages'   => [
-                [
-                    'role'    => 'user',
-                    'content' => 'Say: ok',
-                ],
-            ],
-        ];
-
-        $response = wp_remote_post( self::API_ENDPOINT, [
-            'timeout' => 15,
+        $response = wp_remote_post( $this->api_endpoint, [
+            'timeout' => 30,
             'headers' => [
                 'x-api-key'         => $this->api_key,
                 'anthropic-version' => '2023-06-01',
                 'content-type'      => 'application/json',
             ],
-            'body'    => wp_json_encode( $body ),
+            'body' => wp_json_encode( [
+                'model'      => $this->model,
+                'max_tokens' => 10,
+                'messages'   => [
+                    [
+                        'role'    => 'user',
+                        'content' => 'Say: ok',
+                    ],
+                ],
+            ] ),
         ] );
 
         if ( is_wp_error( $response ) ) {
-            return $response->get_error_message();
+            return [
+                'success' => false,
+                'message' => 'Connection failed: ' . $response->get_error_message(),
+            ];
         }
 
-        $http_code = wp_remote_retrieve_response_code( $response );
+        $status_code = wp_remote_retrieve_response_code( $response );
 
-        if ( $http_code === 200 ) {
-            return true;
+        if ( $status_code === 200 ) {
+            $body = wp_remote_retrieve_body( $response );
+            $data = json_decode( $body, true );
+            $text = isset( $data['content'][0]['text'] ) ? $data['content'][0]['text'] : 'Connected';
+            return [
+                'success' => true,
+                'message' => 'Claude API connected. Response: ' . $text,
+            ];
         }
 
-        $body_raw   = wp_remote_retrieve_body( $response );
-        $error_data = json_decode( $body_raw, true );
+        $body      = wp_remote_retrieve_body( $response );
+        $error     = json_decode( $body, true );
+        $error_msg = isset( $error['error']['message'] ) ? $error['error']['message'] : 'HTTP ' . $status_code;
 
-        return isset( $error_data['error']['message'] )
-            ? $error_data['error']['message']
-            : 'HTTP error ' . $http_code;
+        return [
+            'success' => false,
+            'message' => 'API error: ' . $error_msg,
+        ];
     }
 }

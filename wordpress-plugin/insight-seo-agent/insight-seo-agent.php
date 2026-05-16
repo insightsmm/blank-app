@@ -6,6 +6,7 @@
  * Version:     2.0.0
  * Author:      InsightSMM
  * License:     GPL-2.0+
+ * Text Domain: insight-seo-agent
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -28,11 +29,15 @@ require_once INSIGHT_SEO_PATH . 'includes/class-admin-page.php';
 register_activation_hook( __FILE__, 'insight_seo_activate' );
 function insight_seo_activate() {
     insight_seo_create_log_table();
-    insight_seo_register_cron_intervals();
+
+    if ( ! get_option( 'insight_seo_settings' ) ) {
+        update_option( 'insight_seo_settings', insight_seo_default_settings() );
+    }
 
     if ( ! wp_next_scheduled( 'insight_seo_cron' ) ) {
         $settings = get_option( 'insight_seo_settings', insight_seo_default_settings() );
-        wp_schedule_event( time(), $settings['cron_interval'] ?? 'every_five_minutes', 'insight_seo_cron' );
+        $interval = isset( $settings['cron_interval'] ) ? $settings['cron_interval'] : 'every_five_minutes';
+        wp_schedule_event( time(), $interval, 'insight_seo_cron' );
     }
 }
 
@@ -83,11 +88,7 @@ function insight_seo_default_settings() {
     ];
 }
 
-// Register cron intervals
-function insight_seo_register_cron_intervals() {
-    // Intervals are added via filter below
-}
-
+// Register custom cron schedules
 add_filter( 'cron_schedules', 'insight_seo_add_cron_intervals' );
 function insight_seo_add_cron_intervals( $schedules ) {
     $schedules['every_five_minutes'] = [
@@ -143,18 +144,16 @@ function insight_seo_on_save_post( $post_id, $post, $update ) {
     }
 
     // Only trigger if not already processed
-    $already_processed = get_post_meta( $post_id, '_insight_seo_processed', true );
-    if ( ! empty( $already_processed ) ) {
+    if ( get_post_meta( $post_id, '_insight_seo_processed', true ) ) {
         return;
     }
 
     // Check if already queued
-    $queued = get_post_meta( $post_id, '_insight_seo_queued', true );
-    if ( ! empty( $queued ) ) {
+    if ( get_post_meta( $post_id, '_insight_seo_queued', true ) ) {
         return;
     }
 
-    // Mark as queued
+    // Mark as queued to prevent duplicate scheduling
     update_post_meta( $post_id, '_insight_seo_queued', current_time( 'mysql' ) );
 
     // Schedule single event 10 seconds later
@@ -163,12 +162,12 @@ function insight_seo_on_save_post( $post_id, $post, $update ) {
     }
 }
 
-// Instantiate admin page and runner
+// Instantiate admin page
 if ( is_admin() ) {
     new Insight_SEO_Admin_Page();
 }
 
-// REST API
+// REST API endpoints
 add_action( 'rest_api_init', 'insight_seo_register_rest_routes' );
 function insight_seo_register_rest_routes() {
     // GET /wp-json/insight-seo/v1/logs
@@ -194,25 +193,27 @@ function insight_seo_register_rest_routes() {
 }
 
 function insight_seo_rest_permission( WP_REST_Request $request ) {
-    // Allow with application passwords or cookie auth
     return current_user_can( 'manage_options' );
 }
 
 function insight_seo_rest_get_logs( WP_REST_Request $request ) {
     global $wpdb;
     $table = $wpdb->prefix . 'insight_seo_log';
+
     // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-    $rows = $wpdb->get_results( $wpdb->prepare(
-        "SELECT * FROM `{$table}` ORDER BY processed_at DESC LIMIT %d",
-        100
-    ) );
+    $rows = $wpdb->get_results(
+        $wpdb->prepare(
+            "SELECT * FROM `{$table}` ORDER BY processed_at DESC LIMIT %d",
+            100
+        )
+    );
 
     $activity_log = get_option( 'insight_seo_activity_log', '' );
     $lines        = array_slice( array_filter( explode( "\n", $activity_log ) ), -100 );
 
     return rest_ensure_response( [
-        'db_logs'      => $rows,
-        'activity_log' => $lines,
+        'db_logs'      => $rows ? $rows : [],
+        'activity_log' => array_values( $lines ),
     ] );
 }
 
@@ -226,15 +227,19 @@ function insight_seo_rest_get_stats( WP_REST_Request $request ) {
     global $wpdb;
     $table = $wpdb->prefix . 'insight_seo_log';
 
-    $total_processed = (int) $wpdb->get_var( "SELECT COUNT(*) FROM `{$table}`" ); // phpcs:ignore
+    // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+    $total_processed = (int) $wpdb->get_var( "SELECT COUNT(*) FROM `{$table}`" );
 
-    $published_today = (int) $wpdb->get_var( $wpdb->prepare(
-        "SELECT COUNT(*) FROM `{$table}` WHERE status = %s AND DATE(processed_at) = %s",
-        'published',
-        current_time( 'Y-m-d' )
-    ) );
+    $published_today = (int) $wpdb->get_var(
+        $wpdb->prepare(
+            "SELECT COUNT(*) FROM `{$table}` WHERE status = %s AND DATE(processed_at) = %s",
+            'published',
+            current_time( 'Y-m-d' )
+        )
+    );
 
-    $avg_score = (float) $wpdb->get_var( "SELECT AVG(seo_score_after) FROM `{$table}` WHERE seo_score_after > 0" ); // phpcs:ignore
+    // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+    $avg_score = (float) $wpdb->get_var( "SELECT AVG(seo_score_after) FROM `{$table}` WHERE seo_score_after > 0" );
 
     $draft_query = new WP_Query( [
         'post_status'    => 'draft',
@@ -244,10 +249,14 @@ function insight_seo_rest_get_stats( WP_REST_Request $request ) {
     ] );
     $draft_count = $draft_query->found_posts;
 
+    $next_cron = wp_next_scheduled( 'insight_seo_cron' );
+
     return rest_ensure_response( [
         'total_processed' => $total_processed,
         'published_today' => $published_today,
         'avg_score'       => round( $avg_score, 1 ),
-        'draft_count'     => $draft_count,
+        'draft_count'     => (int) $draft_count,
+        'agent_active'    => (bool) $next_cron,
+        'next_cron'       => $next_cron ? gmdate( 'Y-m-d H:i:s', $next_cron ) : null,
     ] );
 }
