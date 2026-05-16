@@ -1,2 +1,2 @@
-imagemagick
-fonts-dejavu-core
+libxml2-dev
+libxslt-dev
