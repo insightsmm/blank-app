@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS companies (
     stripe_secret_key TEXT, stripe_publishable_key TEXT,
     gmail_email TEXT, gmail_app_password TEXT,
     google_maps_key TEXT, anthropic_key TEXT,
-    twilio_sid TEXT, twilio_auth TEXT, twilio_phone TEXT,
+    claude_chat_enabled BOOLEAN DEFAULT TRUE,
     trade_types JSONB DEFAULT '["painting","electrical","landscaping"]',
     pricing_config JSONB DEFAULT '{}',
     settings JSONB DEFAULT '{}',

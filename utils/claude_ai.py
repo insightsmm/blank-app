@@ -1,11 +1,15 @@
 import anthropic
 import streamlit as st
 import json
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Generator
 
 SYSTEM_PROMPT = """You are the ServicePro OS AI Assistant, helping field service professionals manage their business.
 You help with: creating estimates, managing jobs, scheduling crews, answering client questions, and business advice.
 Be concise, professional, and actionable. Focus on painting, electrical, and landscaping services."""
+
+CLIENT_SYSTEM_PROMPT = """You are a friendly customer service assistant for a professional field service company.
+You help clients with: job status updates, appointment scheduling, proposal questions, and general inquiries.
+Be warm, professional, and helpful. If you don't know something specific about their job, let them know a team member will follow up."""
 
 
 def get_client() -> Optional[anthropic.Anthropic]:
@@ -268,3 +272,140 @@ def chat_with_context(
     except Exception as e:
         print(f"chat_with_context error: {e}")
         return f"I encountered an error: {str(e)}"
+
+
+def stream_chat_response(
+    user_message: str,
+    chat_history: List[Dict],
+    system_prompt: str = None,
+) -> Generator[str, None, None]:
+    """
+    Stream a Claude response token-by-token.
+    Use with st.write_stream() for live typewriter output.
+
+    Usage in a page:
+        with st.chat_message("assistant"):
+            response = st.write_stream(
+                stream_chat_response(user_input, history)
+            )
+        # response is the full accumulated string after streaming
+    """
+    client = get_client()
+    if not client:
+        yield "AI chat is not configured. Please add your Anthropic API key in Settings → API Keys."
+        return
+
+    try:
+        messages = list(chat_history) + [{"role": "user", "content": user_message}]
+        with client.messages.stream(
+            model="claude-opus-4-7",
+            max_tokens=1024,
+            system=system_prompt or SYSTEM_PROMPT,
+            messages=messages,
+        ) as stream:
+            for text in stream.text_stream:
+                yield text
+    except anthropic.AuthenticationError:
+        yield "Invalid Anthropic API key. Please update it in Settings."
+    except anthropic.RateLimitError:
+        yield "Rate limit reached — please wait a moment and try again."
+    except Exception as e:
+        print(f"stream_chat_response error: {e}")
+        yield f"Error: {str(e)}"
+
+
+def stream_client_chat(
+    user_message: str,
+    chat_history: List[Dict],
+    company_name: str,
+    job_context: dict = None,
+) -> Generator[str, None, None]:
+    """
+    Streaming chat for client-facing conversations (from the Messages page).
+    Includes job/company context so Claude can answer client questions.
+    """
+    client = get_client()
+    if not client:
+        yield "Chat is currently unavailable. Please contact us directly."
+        return
+
+    try:
+        job_info = ""
+        if job_context:
+            job_info = (
+                f"\nCurrent job context: {job_context.get('title', 'N/A')}, "
+                f"Status: {job_context.get('status', 'N/A')}, "
+                f"Progress: {job_context.get('progress', 0)}%"
+            )
+
+        system = (
+            f"{CLIENT_SYSTEM_PROMPT}\n\n"
+            f"You are representing: {company_name}\n"
+            f"{job_info}\n"
+            f"Keep responses concise and client-friendly."
+        )
+
+        messages = list(chat_history) + [{"role": "user", "content": user_message}]
+        with client.messages.stream(
+            model="claude-opus-4-7",
+            max_tokens=512,
+            system=system,
+            messages=messages,
+        ) as stream:
+            for text in stream.text_stream:
+                yield text
+    except Exception as e:
+        print(f"stream_client_chat error: {e}")
+        yield "I'm having trouble responding right now. Please try again."
+
+
+def stream_with_context(
+    user_message: str,
+    chat_history: List[Dict],
+    company_context: dict,
+    user_role: str,
+) -> Generator[str, None, None]:
+    """
+    Streaming version of chat_with_context — for the AI Assistant page.
+    Yields tokens as they arrive from Claude.
+    """
+    client = get_client()
+    if not client:
+        yield "AI Assistant is not configured. Please add your Anthropic API key in Settings."
+        return
+
+    try:
+        company_name = company_context.get("name", "the company")
+        trade_types = company_context.get("trade_types", ["painting", "electrical", "landscaping"])
+        if isinstance(trade_types, str):
+            try:
+                trade_types = json.loads(trade_types)
+            except Exception:
+                trade_types = [trade_types]
+
+        system = (
+            f"{SYSTEM_PROMPT}\n\n"
+            f"Current context:\n"
+            f"- Company: {company_name}\n"
+            f"- Services: {', '.join(str(t) for t in trade_types)}\n"
+            f"- User role: {user_role}\n\n"
+            f"Help the user with their specific question. If you need data you don't have, "
+            f"suggest where in the app to find it."
+        )
+
+        messages = list(chat_history) + [{"role": "user", "content": user_message}]
+        with client.messages.stream(
+            model="claude-opus-4-7",
+            max_tokens=1024,
+            system=system,
+            messages=messages,
+        ) as stream:
+            for text in stream.text_stream:
+                yield text
+    except anthropic.AuthenticationError:
+        yield "Invalid Anthropic API key. Please update it in Settings."
+    except anthropic.RateLimitError:
+        yield "Rate limit reached. Please wait a moment and try again."
+    except Exception as e:
+        print(f"stream_with_context error: {e}")
+        yield f"Error: {str(e)}"
