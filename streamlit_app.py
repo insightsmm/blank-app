@@ -1,527 +1,477 @@
 """
-WordPress SEO Agent Monitor
-----------------------------
-A Streamlit dashboard that connects to the Insight SEO Agent WordPress plugin
-via its REST API endpoints:
-  GET  /wp-json/insight-seo/v1/stats
-  GET  /wp-json/insight-seo/v1/logs
-  POST /wp-json/insight-seo/v1/run
+ServicePro OS — Main Entry Point
+Login, registration, and the authenticated navigation hub.
 """
 
 import streamlit as st
-import requests
-import json
-from datetime import datetime
+import time
 
-# ─────────────────────────────────────────────
-# Page configuration
-# ─────────────────────────────────────────────
+from utils.auth import (
+    check_authentication,
+    login_user,
+    logout_user,
+    hash_password,
+    verify_password,
+)
+from utils.db import (
+    get_user_by_email,
+    create_user,
+    get_company,
+    create_company,
+    get_supabase,
+    SCHEMA_SQL,
+    get_dashboard_stats,
+)
+from utils.styles import inject_css, render_metric_card, format_currency, COLORS
+
+# ── Page Config ────────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="WordPress SEO Agent Monitor",
-    page_icon="📊",
+    page_title="ServicePro OS",
+    page_icon="🔧",
     layout="wide",
+    initial_sidebar_state="expanded",
 )
 
-# ─────────────────────────────────────────────
-# Custom CSS
-# ─────────────────────────────────────────────
-st.markdown(
-    """
-    <style>
-    #MainMenu, footer, header {visibility: hidden;}
-    .block-container {padding-top: 1.5rem; max-width: 1200px;}
+inject_css()
 
-    .stButton > button {
-        background: linear-gradient(135deg, #10B981 0%, #3B82F6 100%);
-        color: white;
-        border: none;
-        border-radius: 8px;
-        padding: 0.5rem 1.4rem;
-        font-weight: 600;
-        font-size: 14px;
-        transition: opacity 0.2s;
-    }
-    .stButton > button:hover { opacity: 0.85; }
-    .stButton > button:disabled { opacity: 0.5; cursor: not-allowed; }
 
-    .metric-card {
-        background: #ffffff;
-        border: 1px solid #e2e8f0;
-        border-radius: 12px;
-        padding: 20px;
-        text-align: center;
-        box-shadow: 0 1px 4px rgba(0,0,0,0.07);
-    }
-    .metric-number {
-        font-size: 2.4rem;
-        font-weight: 800;
-        color: #1d2327;
-        line-height: 1.1;
-    }
-    .metric-label {
-        font-size: 0.8rem;
-        color: #6b7280;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        margin-top: 6px;
-        font-weight: 500;
-    }
+# ── Sidebar Brand Helper ───────────────────────────────────────────────────────
 
-    .score-green  { color: #10B981; font-weight: 700; }
-    .score-orange { color: #F59E0B; font-weight: 700; }
-    .score-red    { color: #EF4444; font-weight: 700; }
-
-    .log-box {
-        background: #1d2327;
-        border: 1px solid #2d3748;
-        border-radius: 8px;
-        padding: 14px 16px;
-        font-family: 'SFMono-Regular', Consolas, monospace;
-        font-size: 12px;
-        line-height: 1.6;
-        height: 380px;
-        overflow-y: auto;
-        color: #a8b5c0;
-        white-space: pre-wrap;
-        word-break: break-word;
-    }
-
-    .status-badge {
-        display: inline-block;
-        padding: 3px 12px;
-        border-radius: 20px;
-        font-size: 12px;
-        font-weight: 600;
-    }
-    .badge-published  { background:#d1fae5; color:#065f46; }
-    .badge-processing { background:#dbeafe; color:#1e40af; }
-    .badge-failed     { background:#fee2e2; color:#991b1b; }
-    .badge-skipped    { background:#f3f4f6; color:#6b7280; }
-    .badge-active     { background:#d1fae5; color:#065f46; }
-    .badge-inactive   { background:#fee2e2; color:#991b1b; }
-
-    .section-header {
-        font-size: 1.1rem;
-        font-weight: 700;
-        color: #1d2327;
-        margin: 1rem 0 0.5rem;
-        border-bottom: 2px solid #e2e8f0;
-        padding-bottom: 6px;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
-# ─────────────────────────────────────────────
-# Session state
-# ─────────────────────────────────────────────
-defaults = {
-    "connected": False,
-    "last_stats": None,
-    "last_logs": None,
-    "last_refresh": None,
-    "run_result": None,
-    "connection_error": None,
-}
-for k, v in defaults.items():
-    if k not in st.session_state:
-        st.session_state[k] = v
-
-# ─────────────────────────────────────────────
-# Sidebar — credentials
-# ─────────────────────────────────────────────
-with st.sidebar:
-    st.markdown("## WordPress Connection")
-    wp_url = st.text_input(
-        "WP Site URL",
-        placeholder="https://insightsm.com",
-        help="Your WordPress site URL (no trailing slash).",
-    )
-    wp_user = st.text_input(
-        "WP Username",
-        help="WordPress admin username.",
-    )
-    wp_pass = st.text_input(
-        "Application Password",
-        type="password",
-        help="Generate at WP Admin > Users > Profile > Application Passwords.",
+def _render_sidebar_brand():
+    st.sidebar.markdown(
+        """
+        <div style="text-align:center; padding: 1rem 0;">
+            <span style="font-size:2rem;">🔧</span>
+            <div style="font-size:1.3rem; font-weight:800; color:#10B981;">ServicePro OS</div>
+            <div style="font-size:0.7rem; color:#6B7280;">Field Operations Platform</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
-    connect_btn = st.button("Connect", use_container_width=True)
 
-    if st.session_state.connected:
-        st.success("Connected")
-    elif st.session_state.connection_error:
-        st.error(st.session_state.connection_error)
+# ── Authenticated Sidebar Navigation ──────────────────────────────────────────
 
-    st.markdown("---")
-    st.markdown("### Quick Links")
-    if wp_url:
-        base = wp_url.rstrip("/")
+def _render_sidebar_nav():
+    _render_sidebar_brand()
+
+    user = st.session_state.get("user", {})
+    company = st.session_state.get("company", {})
+
+    # User info block
+    role = user.get("role", "crew").title()
+    st.sidebar.markdown(
+        f"""
+        <div style="padding:0.75rem; background:#F0FDF4; border-radius:10px; margin-bottom:1rem;">
+            <div style="font-weight:700; color:#1F2937;">{user.get('name', 'User')}</div>
+            <div style="font-size:0.75rem; color:#10B981; font-weight:600;">{role}</div>
+            <div style="font-size:0.75rem; color:#6B7280;">{company.get('name', '')}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.sidebar.markdown("**Navigation**")
+
+    nav_items = [
+        ("📊", "Dashboard", "streamlit_app"),
+        ("👥", "Clients", "pages/clients"),
+        ("📝", "Estimates", "pages/estimates"),
+        ("🔨", "Jobs", "pages/jobs"),
+        ("👷", "Crew", "pages/crew"),
+        ("📅", "Scheduling", "pages/scheduling"),
+        ("💳", "Payments", "pages/payments"),
+        ("💬", "Messages", "pages/messages"),
+        ("🤖", "AI Assistant", "pages/ai_assistant"),
+        ("⚙️", "Settings", "pages/settings"),
+    ]
+
+    for icon, label, page in nav_items:
+        try:
+            st.sidebar.page_link(f"{page}.py", label=f"{icon} {label}")
+        except Exception:
+            # Fallback if page doesn't exist yet
+            st.sidebar.markdown(
+                f'<div style="padding:0.4rem 0; color:#6B7280; font-size:0.9rem;">{icon} {label}</div>',
+                unsafe_allow_html=True,
+            )
+
+    st.sidebar.markdown("---")
+    if st.sidebar.button("🚪 Sign Out", use_container_width=True):
+        logout_user()
+
+
+# ── Login / Register Page ──────────────────────────────────────────────────────
+
+def _render_login_page():
+    _render_sidebar_brand()
+
+    # Centered login card
+    _, col, _ = st.columns([1, 2, 1])
+
+    with col:
+        # Hero section
         st.markdown(
-            f"[WP Admin]({base}/wp-admin/) | "
-            f"[SEO Agent]({base}/wp-admin/admin.php?page=insight-chatgpt-agents-app) | "
-            f"[Drafts]({base}/wp-admin/edit.php?post_status=draft&post_type=post)"
+            """
+            <div style="text-align:center; padding:2rem 0 1rem 0;">
+                <div style="font-size:3.5rem;">🔧</div>
+                <div style="font-size:2rem; font-weight:800; color:#10B981; margin-top:0.5rem;">
+                    ServicePro OS
+                </div>
+                <div style="font-size:1rem; color:#6B7280; margin-top:0.25rem;">
+                    The Operating System for Field Service Businesses
+                </div>
+                <div style="margin-top:0.75rem; display:flex; justify-content:center; gap:1rem; flex-wrap:wrap;">
+                    <span style="background:#D1FAE5; color:#065F46; padding:4px 14px; border-radius:20px; font-size:0.8rem; font-weight:600;">🎨 Painting</span>
+                    <span style="background:#DBEAFE; color:#1E40AF; padding:4px 14px; border-radius:20px; font-size:0.8rem; font-weight:600;">⚡ Electrical</span>
+                    <span style="background:#FEF3C7; color:#92400E; padding:4px 14px; border-radius:20px; font-size:0.8rem; font-weight:600;">🌿 Landscaping</span>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
-    else:
-        st.caption("Enter the site URL to see quick links.")
 
-    st.markdown("---")
-    st.caption("Insight SEO Agent Monitor v2.0")
+        tab_signin, tab_register = st.tabs(["Sign In", "Get Started"])
 
-# ─────────────────────────────────────────────
-# REST API helpers
-# ─────────────────────────────────────────────
+        # ── Sign In Tab ──────────────────────────────────────────────────────
+        with tab_signin:
+            st.markdown("#### Welcome back")
+            email = st.text_input("Email", key="login_email", placeholder="you@example.com")
+            password = st.text_input("Password", type="password", key="login_password", placeholder="••••••••")
 
-def api_get(endpoint: str) -> dict:
-    """Perform authenticated GET to the plugin REST API."""
-    url = wp_url.rstrip("/") + "/wp-json/insight-seo/v1/" + endpoint.lstrip("/")
-    resp = requests.get(url, auth=(wp_user, wp_pass), timeout=20)
-    resp.raise_for_status()
-    return resp.json()
+            if st.button("Sign In", key="btn_signin", use_container_width=True):
+                if not email or not password:
+                    st.error("Please enter your email and password.")
+                else:
+                    with st.spinner("Signing in..."):
+                        user = get_user_by_email(email.strip().lower())
+                        if user and verify_password(password, user.get("password_hash", "")):
+                            company = get_company(user.get("company_id", ""))
+                            if not company:
+                                st.error("Company account not found. Please contact your administrator.")
+                            else:
+                                login_user(user, company)
+                                st.rerun()
+                        else:
+                            st.error("Invalid email or password. Please try again.")
+
+            st.markdown(
+                """
+                <div style="text-align:center; margin-top:1rem; font-size:0.8rem; color:#9CA3AF;">
+                    Don't have an account? Use the <strong>Get Started</strong> tab above.
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        # ── Get Started (Register) Tab ────────────────────────────────────────
+        with tab_register:
+            st.markdown("#### Create your account")
+
+            company_name = st.text_input("Company Name", key="reg_company", placeholder="Acme Painting & Electric")
+            your_name = st.text_input("Your Name", key="reg_name", placeholder="Jane Smith")
+            reg_email = st.text_input("Email", key="reg_email", placeholder="jane@acme.com")
+            reg_password = st.text_input("Password", type="password", key="reg_password", placeholder="Minimum 8 characters")
+            reg_confirm = st.text_input("Confirm Password", type="password", key="reg_confirm", placeholder="Repeat password")
+            reg_role = st.selectbox(
+                "Your Role",
+                options=["owner", "admin", "estimator", "crew_lead"],
+                format_func=lambda r: r.replace("_", " ").title(),
+                key="reg_role",
+            )
+
+            if st.button("Create Account", key="btn_register", use_container_width=True):
+                errors = []
+                if not company_name.strip():
+                    errors.append("Company name is required.")
+                if not your_name.strip():
+                    errors.append("Your name is required.")
+                if not reg_email.strip():
+                    errors.append("Email is required.")
+                if len(reg_password) < 8:
+                    errors.append("Password must be at least 8 characters.")
+                if reg_password != reg_confirm:
+                    errors.append("Passwords do not match.")
+
+                if errors:
+                    for err in errors:
+                        st.error(err)
+                else:
+                    with st.spinner("Creating your account..."):
+                        # Check if email already in use
+                        existing = get_user_by_email(reg_email.strip().lower())
+                        if existing:
+                            st.error("An account with this email already exists. Please sign in.")
+                        else:
+                            # Create company first
+                            new_company = create_company({"name": company_name.strip()})
+                            if not new_company:
+                                st.error(
+                                    "Failed to create company account. "
+                                    "Please check your Supabase configuration and try again."
+                                )
+                            else:
+                                # Create user
+                                new_user = create_user(
+                                    {
+                                        "company_id": new_company["id"],
+                                        "name": your_name.strip(),
+                                        "email": reg_email.strip().lower(),
+                                        "password": reg_password,
+                                        "role": reg_role,
+                                    }
+                                )
+                                if not new_user:
+                                    st.error(
+                                        "Failed to create user account. "
+                                        "Please try again or contact support."
+                                    )
+                                else:
+                                    st.success(
+                                        f"Account created! Welcome to ServicePro OS, {your_name.strip()}. "
+                                        "Please sign in using the Sign In tab."
+                                    )
+
+    # Supabase setup notice when DB is not connected
+    if get_supabase() is None:
+        st.markdown("---")
+        with st.expander("⚠️ Database Setup Required — Click to expand setup instructions", expanded=True):
+            st.markdown(
+                """
+                ### Database Setup Required
+
+                ServicePro OS uses **Supabase** as its database. Follow these steps to set it up:
+
+                **Step 1:** Create a free project at [supabase.com](https://supabase.com)
+
+                **Step 2:** In your Supabase project, go to **Project Settings → API** and copy:
+                - **Project URL** (e.g. `https://xxxxx.supabase.co`)
+                - **Service Role Key** (under "Project API keys")
+
+                **Step 3:** In **Streamlit Cloud → App Settings → Secrets**, add:
+                ```toml
+                SUPABASE_URL = "https://xxxxx.supabase.co"
+                SUPABASE_KEY = "your-service-role-key"
+                ```
+
+                **Step 4:** In Supabase, go to **SQL Editor** and run the schema below.
+
+                **Step 5:** Restart this app.
+                """
+            )
+            st.code(SCHEMA_SQL, language="sql")
 
 
-def api_post(endpoint: str, data: dict = None) -> dict:
-    """Perform authenticated POST to the plugin REST API."""
-    url = wp_url.rstrip("/") + "/wp-json/insight-seo/v1/" + endpoint.lstrip("/")
-    resp = requests.post(url, auth=(wp_user, wp_pass), json=data or {}, timeout=120)
-    resp.raise_for_status()
-    return resp.json()
+# ── Authenticated Dashboard ────────────────────────────────────────────────────
 
+def _render_dashboard():
+    _render_sidebar_nav()
 
-def wp_get(endpoint: str, params: dict = None) -> list | dict:
-    """Perform authenticated GET to the WP REST API v2."""
-    url = wp_url.rstrip("/") + "/wp-json/wp/v2/" + endpoint.lstrip("/")
-    resp = requests.get(url, auth=(wp_user, wp_pass), params=params or {}, timeout=20)
-    resp.raise_for_status()
-    return resp.json()
+    user = st.session_state.get("user", {})
+    company = st.session_state.get("company", {})
 
+    # Page header
+    st.markdown(
+        f"""
+        <div class="page-header">
+            <h1>Welcome back, {user.get('name', 'there')}! 👋</h1>
+            <p>{company.get('name', 'ServicePro OS')} — Field Operations Dashboard</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-def fetch_all_data():
-    """Fetch stats, logs, and drafts from the WP site."""
-    stats = api_get("stats")
-    logs  = api_get("logs")
-    return stats, logs
-
-
-def test_connection(url: str, user: str, password: str) -> tuple[bool, str]:
-    """Test connectivity to the WP site and the plugin REST API."""
-    if not url or not user or not password:
-        return False, "Fill in all fields."
-    try:
-        resp = requests.get(
-            url.rstrip("/") + "/wp-json/insight-seo/v1/stats",
-            auth=(user, password),
-            timeout=15,
+    # Database not configured notice
+    if get_supabase() is None:
+        st.warning(
+            "**Database not connected.** ServicePro OS needs Supabase to store data. "
+            "Please follow the setup instructions on the login page."
         )
-        if resp.status_code == 200:
-            data = resp.json()
-            return True, f"Connected! Agent active: {data.get('agent_active', 'unknown')}"
-        if resp.status_code == 401:
-            return False, "Authentication failed — check username and application password."
-        if resp.status_code == 403:
-            return False, "Permission denied — user must have manage_options capability."
-        if resp.status_code == 404:
-            return False, "Plugin REST API not found. Is the Insight SEO Agent plugin activated?"
-        return False, f"HTTP {resp.status_code}: {resp.text[:200]}"
-    except requests.exceptions.ConnectionError:
-        return False, "Cannot connect — check URL and network."
-    except requests.exceptions.Timeout:
-        return False, "Request timed out."
-    except Exception as exc:
-        return False, str(exc)
+        with st.expander("View Database Setup Instructions"):
+            st.markdown(
+                """
+                1. Create a free Supabase project at [supabase.com](https://supabase.com)
+                2. Copy your **Project URL** and **Service Role Key**
+                3. In Streamlit Cloud Settings → Secrets, add:
+                ```toml
+                SUPABASE_URL = "https://xxx.supabase.co"
+                SUPABASE_KEY = "your-service-role-key"
+                ```
+                4. Run this SQL in the Supabase SQL editor:
+                """
+            )
+            st.code(SCHEMA_SQL, language="sql")
+            st.markdown("5. Restart this app.")
+        return
 
+    # Load dashboard stats
+    with st.spinner("Loading dashboard..."):
+        company_id = company.get("id", "")
+        stats = get_dashboard_stats(company_id) if company_id else {}
 
-# ─────────────────────────────────────────────
-# Handle connect button
-# ─────────────────────────────────────────────
-if connect_btn:
-    with st.spinner("Connecting..."):
-        ok, msg = test_connection(wp_url, wp_user, wp_pass)
-        st.session_state.connected = ok
-        st.session_state.connection_error = None if ok else msg
-        if ok:
+    # Key metrics
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.markdown(
+            render_metric_card(
+                "Total Clients",
+                stats.get("total_clients", 0),
+                icon="👥",
+            ),
+            unsafe_allow_html=True,
+        )
+    with c2:
+        st.markdown(
+            render_metric_card(
+                "Active Jobs",
+                stats.get("active_jobs", 0),
+                icon="🔨",
+            ),
+            unsafe_allow_html=True,
+        )
+    with c3:
+        st.markdown(
+            render_metric_card(
+                "Open Estimates",
+                stats.get("open_estimates", 0),
+                icon="📝",
+            ),
+            unsafe_allow_html=True,
+        )
+    with c4:
+        st.markdown(
+            render_metric_card(
+                "Total Revenue",
+                format_currency(stats.get("total_revenue", 0)),
+                icon="💰",
+            ),
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # Second row
+    c5, c6 = st.columns(2)
+    with c5:
+        st.markdown(
+            render_metric_card(
+                "Jobs This Month",
+                stats.get("jobs_this_month", 0),
+                icon="📅",
+            ),
+            unsafe_allow_html=True,
+        )
+    with c6:
+        st.markdown(
+            render_metric_card(
+                "Revenue This Month",
+                format_currency(stats.get("revenue_this_month", 0)),
+                icon="📈",
+            ),
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # Recent activity
+    col_left, col_right = st.columns([2, 1])
+
+    with col_left:
+        st.markdown("### Recent Activity")
+        activity = stats.get("recent_activity", [])
+        if activity:
+            for item in activity:
+                icon = "🔨" if item.get("type") == "job" else "📝"
+                time_str = item.get("time", "")[:10] if item.get("time") else ""
+                st.markdown(
+                    f"""
+                    <div class="card" style="margin-bottom:0.5rem; padding:0.75rem 1rem;">
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <div>
+                                <span style="font-size:1.1rem;">{icon}</span>
+                                <strong style="margin-left:8px;">{item.get('title', '')}</strong>
+                                <span style="color:#6B7280; font-size:0.85rem; margin-left:8px;">{item.get('detail', '')}</span>
+                            </div>
+                            <div style="color:#9CA3AF; font-size:0.8rem;">{time_str}</div>
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+        else:
+            st.markdown(
+                """
+                <div style="text-align:center; padding:2rem; color:#9CA3AF;">
+                    <div style="font-size:2rem;">📋</div>
+                    <div style="margin-top:0.5rem;">No activity yet — create your first client or estimate to get started.</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+    with col_right:
+        st.markdown("### Quick Actions")
+        actions = [
+            ("➕ New Client", "pages/clients.py"),
+            ("📝 New Estimate", "pages/estimates.py"),
+            ("🔨 New Job", "pages/jobs.py"),
+            ("📅 Schedule Work", "pages/scheduling.py"),
+            ("💬 Messages", "pages/messages.py"),
+            ("🤖 Ask AI Assistant", "pages/ai_assistant.py"),
+        ]
+        for label, page in actions:
             try:
-                stats, logs = fetch_all_data()
-                st.session_state.last_stats = stats
-                st.session_state.last_logs  = logs
-                st.session_state.last_refresh = datetime.now().strftime("%H:%M:%S")
-            except Exception as exc:
-                st.session_state.connection_error = f"Connected but failed to load data: {exc}"
-        st.rerun()
+                st.page_link(page, label=label)
+            except Exception:
+                st.markdown(
+                    f'<div style="padding:0.3rem 0; color:#10B981; font-size:0.9rem;">{label}</div>',
+                    unsafe_allow_html=True,
+                )
 
-# ─────────────────────────────────────────────
-# Main content
-# ─────────────────────────────────────────────
+        st.markdown("---")
+        st.markdown("### API Configuration")
 
-st.markdown("# WordPress SEO Agent Monitor")
+        has_stripe = bool(company.get("stripe_secret_key"))
+        has_gmail = bool(company.get("gmail_email") and company.get("gmail_app_password"))
+        has_maps = bool(company.get("google_maps_key"))
+        has_ai = bool(company.get("anthropic_key"))
 
-if not st.session_state.connected:
-    st.info("Enter your WordPress credentials in the sidebar and click **Connect** to get started.")
+        integrations = [
+            ("💳 Stripe Payments", has_stripe),
+            ("📧 Gmail Integration", has_gmail),
+            ("🗺️ Google Maps", has_maps),
+            ("🤖 AI Assistant", has_ai),
+        ]
 
-    st.markdown("---")
-    st.markdown("## About This Dashboard")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("""
-        **This dashboard monitors the Insight SEO Agent WordPress plugin.**
+        for name, configured in integrations:
+            status_icon = "✅" if configured else "⚠️"
+            status_text = "Configured" if configured else "Not set"
+            status_color = "#10B981" if configured else "#F59E0B"
+            st.markdown(
+                f'<div style="display:flex; justify-content:space-between; padding:4px 0; font-size:0.85rem;">'
+                f'<span>{name}</span>'
+                f'<span style="color:{status_color}; font-weight:600;">{status_icon} {status_text}</span>'
+                f"</div>",
+                unsafe_allow_html=True,
+            )
 
-        The plugin automatically:
-        - Detects new draft posts and pages
-        - Optimises SEO using Claude AI
-        - Adds relevant images from Pexels
-        - Publishes when SEO score reaches 85+
-
-        **Requirements:**
-        - Insight SEO Agent plugin installed & activated
-        - WordPress Application Password (WP 5.6+)
-        - Claude API key configured in the plugin
-        """)
-    with col2:
-        st.markdown("""
-        **REST API Endpoints used:**
-        - `GET /wp-json/insight-seo/v1/stats` — Agent stats
-        - `GET /wp-json/insight-seo/v1/logs` — Processing logs
-        - `POST /wp-json/insight-seo/v1/run` — Trigger agent cycle
-
-        **To generate an Application Password:**
-        1. Log in to WP Admin
-        2. Go to Users → Your Profile
-        3. Scroll to "Application Passwords"
-        4. Enter a name and click "Add New"
-        5. Copy the generated password (shown once)
-        """)
-    st.stop()
-
-# ─────────────────────────────────────────────
-# Connected — show dashboard
-# ─────────────────────────────────────────────
-
-stats = st.session_state.last_stats or {}
-logs  = st.session_state.last_logs  or {}
-
-# Top action bar
-header_col1, header_col2, header_col3, header_col4 = st.columns([2, 2, 2, 1])
-
-with header_col1:
-    agent_active = stats.get("agent_active", False)
-    badge_cls    = "badge-active" if agent_active else "badge-inactive"
-    badge_text   = "Agent Active" if agent_active else "Agent Inactive"
-    st.markdown(
-        f'<span class="status-badge {badge_cls}">{badge_text}</span>',
-        unsafe_allow_html=True,
-    )
-    if stats.get("next_cron"):
-        st.caption(f"Next cron: {stats['next_cron']}")
-
-with header_col2:
-    trigger_btn = st.button("Trigger Agent Cycle", use_container_width=True)
-
-with header_col3:
-    refresh_btn = st.button("Refresh Data", use_container_width=True)
-
-with header_col4:
-    if st.session_state.last_refresh:
-        st.caption(f"Updated: {st.session_state.last_refresh}")
-
-# ─── Trigger agent cycle ───
-if trigger_btn:
-    with st.spinner("Running agent cycle on the WordPress site... (this may take 30-90s)"):
+        st.markdown(
+            '<div style="margin-top:0.5rem;">', unsafe_allow_html=True
+        )
         try:
-            result = api_post("run")
-            st.session_state.run_result = result
-            # Refresh data after run
-            stats, logs = fetch_all_data()
-            st.session_state.last_stats   = stats
-            st.session_state.last_logs    = logs
-            st.session_state.last_refresh = datetime.now().strftime("%H:%M:%S")
-        except requests.exceptions.HTTPError as exc:
-            st.error(f"API error: {exc}")
-        except Exception as exc:
-            st.error(f"Error triggering cycle: {exc}")
-    st.rerun()
+            st.page_link("pages/settings.py", label="⚙️ Configure Integrations")
+        except Exception:
+            st.markdown("⚙️ Go to Settings to configure integrations", unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
 
-# Show run result if available
-if st.session_state.run_result:
-    r = st.session_state.run_result
-    processed  = r.get("processed", 0)
-    published  = r.get("published", 0)
-    failed     = r.get("failed", 0)
-    skipped    = r.get("skipped", 0)
-    st.success(
-        f"Cycle complete — Processed: **{processed}**, Published: **{published}**, "
-        f"Failed: **{failed}**, Skipped: **{skipped}**"
-    )
-    if st.button("Dismiss", key="dismiss_run"):
-        st.session_state.run_result = None
-        st.rerun()
 
-# ─── Refresh data ───
-if refresh_btn:
-    with st.spinner("Refreshing..."):
-        try:
-            stats, logs = fetch_all_data()
-            st.session_state.last_stats   = stats
-            st.session_state.last_logs    = logs
-            st.session_state.last_refresh = datetime.now().strftime("%H:%M:%S")
-        except Exception as exc:
-            st.error(f"Refresh failed: {exc}")
-    st.rerun()
+# ── Main Entry Point ───────────────────────────────────────────────────────────
 
-st.markdown("---")
-
-# ─────────────────────────────────────────────
-# Stat cards
-# ─────────────────────────────────────────────
-s1, s2, s3, s4 = st.columns(4)
-
-draft_count     = stats.get("draft_count", "–")
-published_today = stats.get("published_today", "–")
-avg_score       = stats.get("avg_score", 0)
-total_processed = stats.get("total_processed", "–")
-
-score_color = "#10B981" if avg_score >= 85 else ("#F59E0B" if avg_score >= 70 else "#EF4444")
-
-with s1:
-    st.markdown(
-        f'<div class="metric-card">'
-        f'<div class="metric-number">{draft_count}</div>'
-        f'<div class="metric-label">Draft Posts</div>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-with s2:
-    st.markdown(
-        f'<div class="metric-card">'
-        f'<div class="metric-number" style="color:#10B981">{published_today}</div>'
-        f'<div class="metric-label">Published Today</div>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-with s3:
-    st.markdown(
-        f'<div class="metric-card">'
-        f'<div class="metric-number" style="color:{score_color}">{avg_score}</div>'
-        f'<div class="metric-label">Avg SEO Score</div>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-with s4:
-    st.markdown(
-        f'<div class="metric-card">'
-        f'<div class="metric-number">{total_processed}</div>'
-        f'<div class="metric-label">Total Processed</div>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-
-st.markdown("---")
-
-# ─────────────────────────────────────────────
-# Two-column layout: DB logs + Activity log
-# ─────────────────────────────────────────────
-left_col, right_col = st.columns([3, 2])
-
-with left_col:
-    st.markdown('<div class="section-header">Recent Processing Log</div>', unsafe_allow_html=True)
-
-    db_logs = logs.get("db_logs", [])
-
-    if not db_logs:
-        st.info("No posts have been processed yet.")
+def main():
+    if check_authentication():
+        _render_dashboard()
     else:
-        # Build display table
-        rows = []
-        for entry in db_logs[:20]:
-            score_after = entry.get("seo_score_after", 0)
-            if isinstance(score_after, str):
-                try:
-                    score_after = int(score_after)
-                except ValueError:
-                    score_after = 0
+        _render_login_page()
 
-            score_cls = "score-green" if score_after >= 85 else ("score-orange" if score_after >= 70 else "score-red")
-            status    = entry.get("status", "unknown")
-            badge_cls = f"badge-{status}" if status in ("published", "processing", "failed", "skipped") else "badge-processing"
 
-            rows.append({
-                "Title":   (entry.get("post_title") or "(untitled)")[:50],
-                "Type":    entry.get("post_type", "post"),
-                "Before":  entry.get("seo_score_before", 0),
-                "After":   score_after,
-                "Status":  status.capitalize(),
-                "Iters":   entry.get("iterations", 0),
-                "Date":    (entry.get("processed_at") or "")[:16],
-            })
-
-        import pandas as pd
-        df = pd.DataFrame(rows)
-        st.dataframe(df, use_container_width=True, hide_index=True)
-
-with right_col:
-    st.markdown('<div class="section-header">Activity Log</div>', unsafe_allow_html=True)
-
-    activity_lines = logs.get("activity_log", [])
-    if activity_lines:
-        log_text = "\n".join(str(line) for line in activity_lines[-100:])
-    else:
-        log_text = "(No activity logged yet.)"
-
-    st.markdown(
-        f'<div class="log-box">{log_text}</div>',
-        unsafe_allow_html=True,
-    )
-
-st.markdown("---")
-
-# ─────────────────────────────────────────────
-# Current drafts (live from WP REST API)
-# ─────────────────────────────────────────────
-st.markdown('<div class="section-header">Current Draft Posts</div>', unsafe_allow_html=True)
-
-try:
-    draft_posts = wp_get("posts", {"status": "draft", "per_page": 20})
-    draft_pages = wp_get("pages", {"status": "draft", "per_page": 10})
-
-    all_drafts = []
-    for p in (draft_posts if isinstance(draft_posts, list) else []):
-        all_drafts.append({
-            "ID":      p.get("id"),
-            "Type":    "Post",
-            "Title":   (p.get("title", {}).get("rendered") or "")[:60],
-            "Slug":    p.get("slug", ""),
-            "Created": (p.get("date") or "")[:10],
-        })
-    for p in (draft_pages if isinstance(draft_pages, list) else []):
-        all_drafts.append({
-            "ID":      p.get("id"),
-            "Type":    "Page",
-            "Title":   (p.get("title", {}).get("rendered") or "")[:60],
-            "Slug":    p.get("slug", ""),
-            "Created": (p.get("date") or "")[:10],
-        })
-
-    if all_drafts:
-        import pandas as pd
-        df_drafts = pd.DataFrame(all_drafts)
-        st.dataframe(df_drafts, use_container_width=True, hide_index=True)
-    else:
-        st.success("No draft posts found — all caught up!")
-
-except requests.exceptions.HTTPError as exc:
-    if exc.response.status_code == 401:
-        st.warning("Cannot load drafts: authentication failed.")
-    else:
-        st.warning(f"Could not load drafts: HTTP {exc.response.status_code}")
-except Exception as exc:
-    st.warning(f"Could not load current drafts: {exc}")
-
-# ─────────────────────────────────────────────
-# Footer
-# ─────────────────────────────────────────────
-st.markdown("---")
-st.caption(
-    "Insight SEO Agent Monitor — powered by Claude AI & Pexels. "
-    f"Plugin REST API: `{wp_url.rstrip('/') if wp_url else '[site URL]'}/wp-json/insight-seo/v1/`"
-)
+main()
