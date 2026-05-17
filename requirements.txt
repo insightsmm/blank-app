@@ -5,3 +5,9 @@ beautifulsoup4
 lxml
 Pillow
 pandas
+supabase
+bcrypt
+stripe
+folium
+streamlit-folium
+reportlab
